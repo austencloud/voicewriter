@@ -129,7 +129,12 @@ class Typer:
         while _modifiers_down() and time.monotonic() < deadline:
             time.sleep(0.02)
         hwnd = user32.GetForegroundWindow()
-        if not hwnd or hwnd == self._own() or _blocked(hwnd):
+        if not hwnd or hwnd == self._own():
+            self._on_failed(text)
+            return
+        if _blocked(hwnd):
+            # Counted in the log so "should Dictate run as admin?" can be answered from real use.
+            log.info("admin window: sentence sent to the clipboard instead")
             self._on_failed(text)
             return
         if self._watch.should_space():
