@@ -240,16 +240,20 @@ class Transcriber:
         except Exception:
             gpus = 0
         if gpus:
+            # float16 needs an RTX 20-series or newer; older cards get int8, which is close in accuracy.
+            ctype = "float16" if "float16" in ctranslate2.get_supported_compute_types("cuda") else "int8_float32"
             try:
-                final = load(s.final_model, device="cuda", compute_type="float16")
-                preview = load(s.preview_model, device="cuda", compute_type="float16")
+                final = load(s.final_model, device="cuda", compute_type=ctype)
+                preview = load(s.preview_model, device="cuda", compute_type=ctype)
                 return final, preview
             except Exception as e:
                 log.error("GPU load failed (%s); falling back to CPU", e)
+                why = "The graphics card couldn't load the speech model"
         else:
             log.info("no NVIDIA GPU found; using the CPU")
+            why = "No NVIDIA graphics card"
         final = load("small.en", device="cpu", compute_type="int8")
-        self.on_status("No NVIDIA graphics card, so using the CPU: slower and less accurate")
+        self.on_status(f"{why}, so using the CPU: slower and less accurate")
         return final, final
 
     def _prompt(self) -> str:

@@ -1,23 +1,118 @@
-# Dictate
+# VoiceWriter
 
-Dictation only. The one thing it obeys is "mute" / "unmute". A bar docks across
-the top of the primary screen like Voice Access; you talk, gray words show up in
-the bar as you speak, and each finished sentence is typed into whatever has focus
-when you pause.
+Speech-to-text for Windows that runs entirely on your own PC. A thin bar docks
+across the top of the screen. You talk, your words appear in the bar as gray
+preview text, and when you pause the finished sentence is typed into whatever
+window has focus: a browser, an email, a chat, a code editor.
 
-- **On/off:** click anywhere on the bar, press Ctrl+Shift+Space, or say "mute" / "unmute" on its own between pauses. Inside a sentence the word is just typed. While muted it only listens for "unmute"; nothing heard then is typed, shown or saved. Blue = listening, gray = muted.
-- **Menu:** right-click the bar (or the dots on the right): copy last sentence, today's history, word list, microphone, start with Windows, quit.
-- **Word list:** names and jargon Whisper should spell your way, in `%LOCALAPPDATA%\Dictate\words.txt`, one per line. "Edit word list…" opens it; saving applies it to the next sentence.
-- **Nothing gets lost:** long monologues are split at your natural pauses (or the quietest moment if you never pause), never cut off. Every sentence is saved to `%LOCALAPPDATA%\Dictate\history\`, with its audio for two days. If a window refuses typed text (admin windows), the sentence goes to the clipboard and the bar says so.
-- **Recovers by itself:** the mic reopens after an unplug, a device change or waking from sleep; the bar shows an amber badge when sentences queue up behind a busy GPU.
-- **One dictation program only:** if Voice Access or Talon starts, Dictate closes it so words are never typed twice.
-- **Speech engine:** Whisper large-v3 on the GPU for the typed text, small.en for the live preview. Runs fully offline after the first model download.
-- **Crash-proof:** `launch.pyw` restarts it if it ever dies; Windows starts `launch.pyw` at login.
+It only does dictation. It doesn't try to control your computer, so it never
+mistakes a sentence for a command. The one exception is saying "mute" or
+"unmute" on its own.
 
-Settings live in `%LOCALAPPDATA%\Dictate\settings.json` (pause length, hotkey, models). Logs: `dictate.log` in the same folder.
+## Install
 
-Tests (the .wav files are not in git):
+1. Download `VoiceWriter-Setup-x.y.z.exe` from the
+   [Releases page](https://github.com/austencloud/voicewriter/releases).
+2. Run it. It installs for your Windows account only and doesn't ask for
+   administrator rights. Setup downloads Python and the speech libraries
+   (about 2.5 GB installed), so it takes a few minutes.
+3. VoiceWriter starts when setup finishes. The first time, it downloads the
+   speech models (about 3.3 GB more) and the bar says so while it works.
 
-- `.venv\Scripts\python.exe tests\monologue_test.py tests\audio\monologue.wav tests\audio\monologue.txt`
-- `.venv\Scripts\python.exe tests\voice_mute_test.py`
-- `.venv\Scripts\python.exe tests\recovery_test.py` (move the mouse and click once while it runs)
+Windows may warn about an unrecognized app because the installer isn't
+code-signed. Choose "More info", then "Run anyway".
+
+### Requirements
+
+- Windows 10 or 11, 64-bit.
+- An NVIDIA graphics card with at least 6 GB of memory is strongly recommended
+  (GTX 10-series or newer; RTX cards are fastest). Without one VoiceWriter
+  falls back to a smaller model on the CPU, which is slower and makes more
+  mistakes.
+- About 7 GB of disk space.
+- English. The models can do other languages, but VoiceWriter is only tuned
+  and tested for English so far.
+
+## Using it
+
+- **Start and stop:** click anywhere on the bar, press Ctrl+Shift+Space, or say
+  "mute" or "unmute" by itself between pauses. Blue means listening, gray
+  means muted. Inside a sentence those words are just typed like any other.
+  While muted it listens only for "unmute": nothing it hears is typed, shown
+  or saved.
+- **Menu:** right-click the bar for: copy last sentence, today's history, word
+  list, microphone, start with Windows, and quit.
+- **Word list:** names and jargon you want spelled your way. "Edit word list…"
+  in the menu opens it; put one word or phrase per line and save. The next
+  sentence uses it.
+- **Long talking is fine:** VoiceWriter splits long stretches at your natural
+  pauses, or at the quietest moment if you never pause. Nothing is cut off.
+- **Nothing gets lost:** every sentence is saved to today's history, and its
+  audio is kept for two days.
+- **Admin windows:** Windows doesn't let normal programs type into windows
+  running as administrator. For those, VoiceWriter puts the sentence on the
+  clipboard and tells you so on the bar; press Ctrl+V.
+- **Recovers by itself:** the microphone reopens after an unplug, a device
+  change, or waking from sleep. If VoiceWriter ever crashes it restarts.
+- **Other dictation programs:** if Windows Voice Access or Talon is running
+  too, the same words can be typed twice. VoiceWriter warns you, and the menu
+  has a switch to close them automatically. It's off by default because some
+  people rely on Voice Access to control their PC.
+
+## Privacy
+
+Everything happens on your PC. Audio never leaves it, and VoiceWriter makes no
+network connections except to download the speech models the first time
+(from Hugging Face). There's no account, telemetry or analytics.
+
+Your history, saved audio, word list and settings are kept in
+`%LOCALAPPDATA%\VoiceWriter`. Delete that folder to erase them.
+
+## Settings
+
+`%LOCALAPPDATA%\VoiceWriter\settings.json` holds the pause length (`pause_ms`,
+700 by default), the hotkey, the models, the bar height and how many days of
+audio to keep. Quit VoiceWriter before editing it. The log is
+`voicewriter.log` in the same folder.
+
+## How it works
+
+- [Silero VAD](https://github.com/snakers4/silero-vad) detects speech, and a
+  pause of 0.7 seconds ends a sentence.
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) runs Whisper
+  `large-v3` on the GPU for the text that gets typed, and `small.en` for the
+  live preview.
+- Text is typed with Windows `SendInput` as Unicode characters, so it works in
+  any keyboard layout and any app that accepts typing.
+- The bar is a PyQt6 window docked as a Windows app bar, so maximized windows
+  sit below it instead of under it.
+
+## Uninstalling
+
+Use "Installed apps" in Windows Settings. It asks whether to also delete your
+history and settings; the answer defaults to keeping them.
+
+## Running from source
+
+Needs Python 3.13 and [uv](https://github.com/astral-sh/uv):
+
+```
+uv venv .venv --python 3.13
+uv pip install --python .venv -r requirements.txt
+.venv\Scripts\pythonw.exe launch.pyw
+```
+
+Tests (the recordings they use are not in the repository; record your own):
+
+```
+.venv\Scripts\python.exe tests\monologue_test.py <recording.wav> <transcript.txt> 1.0
+.venv\Scripts\python.exe tests\voice_mute_test.py
+.venv\Scripts\python.exe tests\recovery_test.py
+```
+
+`recovery_test.py` asks you to move the mouse and click once while it runs.
+
+## License
+
+GPL-3.0, because VoiceWriter is built on PyQt6. See [LICENSE](LICENSE) and
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
