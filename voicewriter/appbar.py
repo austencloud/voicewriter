@@ -41,7 +41,7 @@ user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.SetWindowLongPtrW.argtypes = (wt.HWND, ctypes.c_int, ctypes.c_ssize_t)
 user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
 
-CALLBACK_MSG = user32.RegisterWindowMessageW("DictateAppBarMessage")
+CALLBACK_MSG = user32.RegisterWindowMessageW("VoiceWriterAppBarMessage")
 
 
 def make_no_activate(hwnd: int) -> None:

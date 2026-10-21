@@ -23,7 +23,7 @@ import soxr
 
 RATE = 16000
 STALE_S = 2.5
-log = logging.getLogger("dictate.audio")
+log = logging.getLogger("voicewriter.audio")
 
 
 class Mic:
@@ -117,7 +117,7 @@ class Mic:
                 self._last_audio = time.monotonic()  # wait a full stale period before retrying
                 if self.error is None:
                     log.error("could not open microphone: %s", e)
-                self.error = "No microphone found. Plug one in; Dictate picks it up by itself."
+                self.error = "No microphone found. Plug one in; VoiceWriter picks it up by itself."
 
     def _close(self) -> None:
         with self._lock:

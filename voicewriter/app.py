@@ -19,13 +19,13 @@ from PyQt6.QtWidgets import QApplication
 from .audio import Mic
 from .config import DATA_DIR, HISTORY_DIR, LOG_PATH, WORDS_PATH, Settings, read_words, write_words
 from .engine import COMMAND_MAX_S, Segmenter, Transcriber, prune_audio
-from .guard import close_rivals
+from .guard import close_rivals, running_rivals
 from .inject import Typer
 from .input_watch import InputWatch
 from .ui import STATE_LIVE, STATE_LOADING, STATE_OFF, Bar, build_menu
 from .vad import StreamingVad
 
-log = logging.getLogger("dictate")
+log = logging.getLogger("voicewriter")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -52,7 +52,7 @@ def startup_command() -> str:
 def starts_with_windows() -> bool:
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            return bool(winreg.QueryValueEx(k, "Dictate")[0])
+            return bool(winreg.QueryValueEx(k, "VoiceWriter")[0])
     except OSError:
         return False
 
@@ -60,12 +60,23 @@ def starts_with_windows() -> bool:
 def set_starts_with_windows(on: bool) -> None:
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
-            winreg.SetValueEx(k, "Dictate", 0, winreg.REG_SZ, startup_command())
+            winreg.SetValueEx(k, "VoiceWriter", 0, winreg.REG_SZ, startup_command())
         else:
             try:
-                winreg.DeleteValue(k, "Dictate")
+                winreg.DeleteValue(k, "VoiceWriter")
             except OSError:
                 pass
+
+
+def move_old_startup_entry() -> None:
+    """VoiceWriter used to be called Dictate; swap its startup entry for the new one."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as k:
+            winreg.QueryValueEx(k, "Dictate")
+            winreg.DeleteValue(k, "Dictate")
+    except OSError:
+        return
+    set_starts_with_windows(True)
 
 
 class Signals(QObject):
@@ -95,7 +106,7 @@ class Controller:
         self.bar.menu_requested.connect(self.show_menu)
         self.sig.preview.connect(self._on_preview)
         self.sig.final.connect(self._on_final)
-        self.sig.status.connect(lambda s: s and self.bar.show_notice(s))
+        self.sig.status.connect(self._on_status)
         self.sig.failed_typing.connect(self._on_failed_typing)
         self.sig.toggle.connect(self.toggle)
         self.sig.command.connect(self._on_command)
@@ -188,15 +199,28 @@ class Controller:
             self.toggle(keep_speech=True)
 
     def _guard(self) -> None:
-        """Every 2 s, close Voice Access or Talon if one has started."""
+        """Every 2 s, deal with Voice Access or Talon if one has started: close it, or warn once."""
+        warned: set[int] = set()
         while True:
             try:
-                closed = close_rivals()
-                if closed:
-                    self.sig.status.emit(f"Closed {' and '.join(closed)} so your words aren't typed twice.")
+                if self.settings.close_other_dictation:
+                    closed = close_rivals()
+                    if closed:
+                        self.sig.status.emit(f"Closed {' and '.join(closed)} so your words aren't typed twice.")
+                else:
+                    rivals = running_rivals()
+                    new = [name for pid, name in rivals if pid not in warned]
+                    warned = {pid for pid, _ in rivals}
+                    if new:
+                        self.sig.status.emit(f"{' and '.join(sorted(set(new)))} is also listening, so words may be typed "
+                                             "twice. Right-click here to have VoiceWriter close it.")
             except Exception:
                 log.exception("guard check failed")
             time.sleep(2)
+
+    def _toggle_close_others(self) -> None:
+        self.settings.close_other_dictation = not self.settings.close_other_dictation
+        self.settings.save()
 
     def _on_resume(self) -> None:
         self.mic.request_reopen("woke from sleep", 2.0)
@@ -258,6 +282,13 @@ class Controller:
             self.last_text = text
             self.typer.type(text)
 
+    def _on_status(self, text: str) -> None:
+        # A message ending in "…" is ongoing work (a model download) and stays until the next status.
+        if text:
+            self.bar.show_notice(text, 0 if text.endswith("…") else 8)
+        elif self.bar.notice.endswith("…"):
+            self.bar.show_notice("", 0.01)
+
     def _on_failed_typing(self, text: str) -> None:
         QGuiApplication.clipboard().setText(text)
         self.bar.show_notice("Couldn't type into that window, so the text is on your clipboard. Paste with Ctrl+V.", 8)
@@ -275,8 +306,10 @@ class Controller:
             ("Microphone", mic_items),
             ("Start when Windows starts", lambda: set_starts_with_windows(not starts_with_windows()),
              starts_with_windows()),
+            ("Close Voice Access and Talon automatically", self._toggle_close_others,
+             self.settings.close_other_dictation),
             ("-",),
-            ("Quit Dictate", self.quit),
+            ("Quit VoiceWriter", self.quit),
         ]
         build_menu(self.bar, items).exec(pos)
 
@@ -304,7 +337,7 @@ class Controller:
 
 def single_instance() -> bool:
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW(None, False, "Local\\DictateBar")
+    kernel32.CreateMutexW(None, False, "Local\\VoiceWriter")
     return ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
 
 
@@ -313,6 +346,7 @@ def main() -> int:
     if not single_instance():
         log.info("already running")
         return 0
+    move_old_startup_entry()
     sys.setswitchinterval(0.001)  # keeps the keyboard watch snappy while the GPU thread is busy
     log.info("starting")
     app = QApplication(sys.argv)

@@ -2,14 +2,14 @@
 
 Voice Access is part of Windows and can't be uninstalled; Win+Ctrl+S or a settings
 reset can start it again. Talon is uninstalled, but could be reinstalled. If either
-shows up while Dictate runs, Dictate closes it and says so on the bar.
+shows up while VoiceWriter runs, VoiceWriter closes it and says so on the bar.
 """
 
 import ctypes
 import ctypes.wintypes as wt
 import logging
 
-log = logging.getLogger("dictate.guard")
+log = logging.getLogger("voicewriter.guard")
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel32.CreateToolhelp32Snapshot.restype = wt.HANDLE
 kernel32.OpenProcess.restype = wt.HANDLE

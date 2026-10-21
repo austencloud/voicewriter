@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
-from dictate.ui import STATE_LIVE, Bar  # noqa: E402
+from voicewriter.ui import STATE_LIVE, Bar  # noqa: E402
 
 out = Path(sys.argv[1])
 out.mkdir(parents=True, exist_ok=True)
@@ -27,5 +27,5 @@ b.preview = ""
 b.committed = ""
 b.speaking = False
 b.level = 0.0
-b.alert = "No microphone found. Plug one in; Dictate picks it up by itself."
+b.alert = "No microphone found. Plug one in; VoiceWriter picks it up by itself."
 b.grab().save(str(out / "no_mic.png"))

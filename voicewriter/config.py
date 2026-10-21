@@ -2,17 +2,38 @@
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Dictate"
+DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "VoiceWriter"
 SETTINGS_PATH = DATA_DIR / "settings.json"
+
+
+def _move_old_data() -> None:
+    """VoiceWriter used to be called Dictate; bring its settings, word list and history along."""
+    old = DATA_DIR.parent / "Dictate"
+    if not old.is_dir() or DATA_DIR.exists():
+        return
+    try:
+        try:
+            old.rename(DATA_DIR)
+        except OSError:  # files still open (an old copy running): copy instead
+            shutil.copytree(old, DATA_DIR)
+        raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        raw.setdefault("close_other_dictation", True)  # Dictate always did this
+        SETTINGS_PATH.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
+_move_old_data()
 HISTORY_DIR = DATA_DIR / "history"
 AUDIO_DIR = DATA_DIR / "audio"
-LOG_PATH = DATA_DIR / "dictate.log"
+LOG_PATH = DATA_DIR / "voicewriter.log"
 # The word list, one word or phrase per line. Opened from the bar's menu; changes apply on save.
 WORDS_PATH = DATA_DIR / "words.txt"
-WORDS_HEADER = ("# Words and names Dictate should spell your way, one per line.\n"
+WORDS_HEADER = ("# Words and names VoiceWriter should spell your way, one per line.\n"
                 "# Save this file and the next sentence uses the new list.\n")
 
 
@@ -40,7 +61,10 @@ class Settings:
     soft_split_s: float = 12.0
     hard_split_s: float = 27.0
     # Words Whisper should spell your way (names, jargon).
-    vocabulary: list[str] = field(default_factory=lambda: ["TKA", "Flow Arts Composer", "Cirque Aflame", "poi", "Talon"])
+    vocabulary: list[str] = field(default_factory=list)
+    # Close Voice Access and Talon whenever they start, so words are never typed twice.
+    # Off by default: some people rely on Voice Access to control their PC.
+    close_other_dictation: bool = False
     listen_on_start: bool = True
     hotkey: str = "ctrl+shift+space"
     bar_height: int = 40

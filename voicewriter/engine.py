@@ -26,7 +26,7 @@ from .vad import FRAME, StreamingVad
 
 RATE = 16000
 FRAME_MS = FRAME * 1000 / RATE
-log = logging.getLogger("dictate.engine")
+log = logging.getLogger("voicewriter.engine")
 
 START_PROB = 0.5
 KEEP_PROB = 0.35
@@ -165,7 +165,7 @@ def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-# The only two things Dictate obeys, and only when said on their own between pauses.
+# The only two things VoiceWriter obeys, and only when said on their own between pauses.
 # "I need to mute the TV" is just words and gets typed.
 _COMMANDS = {"mute": "mute", "unmute": "unmute", "un mute": "unmute"}
 COMMAND_MAX_S = 3.0  # utterances longer than this are never checked while muted
@@ -230,17 +230,27 @@ class Transcriber:
             try:
                 return WhisperModel(name, local_files_only=True, **kw)
             except Exception:
+                self.on_status(f"Downloading the {name} speech model (first run only, can take a few minutes)…")
+                log.info("downloading model %s", name)
                 return WhisperModel(name, **kw)
 
+        import ctranslate2
         try:
-            final = load(s.final_model, device="cuda", compute_type="float16")
-            preview = load(s.preview_model, device="cuda", compute_type="float16")
-            return final, preview
-        except Exception as e:
-            log.error("GPU load failed (%s); falling back to CPU", e)
-            self.on_status("GPU unavailable, using CPU (slower)")
-            final = WhisperModel("small.en", device="cpu", compute_type="int8")
-            return final, final
+            gpus = ctranslate2.get_cuda_device_count()
+        except Exception:
+            gpus = 0
+        if gpus:
+            try:
+                final = load(s.final_model, device="cuda", compute_type="float16")
+                preview = load(s.preview_model, device="cuda", compute_type="float16")
+                return final, preview
+            except Exception as e:
+                log.error("GPU load failed (%s); falling back to CPU", e)
+        else:
+            log.info("no NVIDIA GPU found; using the CPU")
+        final = load("small.en", device="cpu", compute_type="int8")
+        self.on_status("No NVIDIA graphics card, so using the CPU: slower and less accurate")
+        return final, final
 
     def _prompt(self) -> str:
         # The word list comes first and is never pushed out by recent sentences.

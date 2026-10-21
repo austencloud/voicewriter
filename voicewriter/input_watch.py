@@ -19,7 +19,7 @@ import ctypes.wintypes as wt
 import logging
 import threading
 
-log = logging.getLogger("dictate.input")
+log = logging.getLogger("voicewriter.input")
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -201,10 +201,10 @@ class InputWatch:
         wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
         wc.lpfnWndProc = self._proc
         wc.hInstance = hinst
-        wc.lpszClassName = "DictateInputWatch"
+        wc.lpszClassName = "VoiceWriterInputWatch"
         user32.RegisterClassExW(ctypes.byref(wc))
         # A hidden top-level window (not message-only) so it also gets device and power broadcasts.
-        self.hwnd = user32.CreateWindowExW(0x80, "DictateInputWatch", "Dictate input watch", 0, 0, 0, 0, 0,
+        self.hwnd = user32.CreateWindowExW(0x80, "VoiceWriterInputWatch", "VoiceWriter input watch", 0, 0, 0, 0, 0,
                                            None, None, hinst, None)
         devices = (RAWINPUTDEVICE * 2)(RAWINPUTDEVICE(0x01, 0x02, RIDEV_INPUTSINK, self.hwnd),
                                        RAWINPUTDEVICE(0x01, 0x06, RIDEV_INPUTSINK, self.hwnd))

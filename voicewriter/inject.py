@@ -12,7 +12,7 @@ import queue
 import threading
 import time
 
-log = logging.getLogger("dictate.inject")
+log = logging.getLogger("voicewriter.inject")
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 INPUT_KEYBOARD = 1
@@ -133,7 +133,7 @@ class Typer:
             self._on_failed(text)
             return
         if _blocked(hwnd):
-            # Counted in the log so "should Dictate run as admin?" can be answered from real use.
+            # Counted in the log so "should VoiceWriter run as admin?" can be answered from real use.
             log.info("admin window: sentence sent to the clipboard instead")
             self._on_failed(text)
             return

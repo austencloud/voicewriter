@@ -17,16 +17,16 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, __file__.rsplit("tests", 1)[0])
-import dictate.engine as engine  # noqa: E402
+import voicewriter.engine as engine  # noqa: E402
 
-_tmp = Path(tempfile.mkdtemp(prefix="dictate-test-"))
+_tmp = Path(tempfile.mkdtemp(prefix="voicewriter-test-"))
 engine.HISTORY_DIR, engine.AUDIO_DIR = _tmp / "history", _tmp / "audio"
 
 from PyQt6.QtCore import QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from dictate.app import Controller  # noqa: E402
-from dictate.engine import command_of  # noqa: E402
+from voicewriter.app import Controller  # noqa: E402
+from voicewriter.engine import command_of  # noqa: E402
 
 AUDIO = Path(__file__).parent / "audio"
 failures = []

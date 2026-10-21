@@ -28,7 +28,7 @@ class Bar(QWidget):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                          | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setWindowTitle("Dictate")
+        self.setWindowTitle("VoiceWriter")
         self.bar_height = height
         self.hotkey_label = hotkey_label
         self.state = STATE_LOADING

@@ -1,4 +1,4 @@
-"""Starts Dictate and brings it back if it ever crashes.
+"""Starts VoiceWriter and brings it back if it ever crashes.
 
 Quitting from the bar's menu exits with code 0, which ends this loop too.
 """
@@ -10,7 +10,10 @@ import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PYTHONW = os.path.join(ROOT, ".venv", "Scripts", "pythonw.exe")
-LOG = os.path.join(os.environ.get("LOCALAPPDATA", ROOT), "Dictate", "launcher.log")
+sys.path.insert(0, ROOT)
+from voicewriter.config import DATA_DIR  # noqa: E402  (importing it also moves data from the old "Dictate" name)
+
+LOG = os.path.join(DATA_DIR, "launcher.log")
 
 
 def note(msg: str) -> None:
@@ -22,7 +25,7 @@ def note(msg: str) -> None:
 crashes: list[float] = []
 while True:
     started = time.time()
-    code = subprocess.call([PYTHONW, "-m", "dictate"], cwd=ROOT)
+    code = subprocess.call([PYTHONW, "-m", "voicewriter"], cwd=ROOT)
     if code == 0:
         note("exited normally")
         break

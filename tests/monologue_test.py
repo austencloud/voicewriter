@@ -18,14 +18,14 @@ sys.path.insert(0, __file__.rsplit("tests", 1)[0])
 import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-import dictate.engine as engine  # noqa: E402
-from dictate.config import Settings  # noqa: E402
-from dictate.engine import Segmenter, Transcriber  # noqa: E402
+import voicewriter.engine as engine  # noqa: E402
+from voicewriter.config import Settings  # noqa: E402
+from voicewriter.engine import Segmenter, Transcriber  # noqa: E402
 
 # Keep test sentences out of the real history.
-_tmp = Path(tempfile.mkdtemp(prefix="dictate-test-"))
+_tmp = Path(tempfile.mkdtemp(prefix="voicewriter-test-"))
 engine.HISTORY_DIR, engine.AUDIO_DIR = _tmp / "history", _tmp / "audio"
-from dictate.vad import StreamingVad  # noqa: E402
+from voicewriter.vad import StreamingVad  # noqa: E402
 
 
 def words(s: str) -> list[str]:

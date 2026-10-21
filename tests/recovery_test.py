@@ -16,10 +16,10 @@ import time
 sys.path.insert(0, __file__.rsplit("tests", 1)[0])
 import numpy as np  # noqa: E402
 
-from dictate.audio import Mic  # noqa: E402
-from dictate.config import Settings  # noqa: E402
-from dictate.engine import Transcriber  # noqa: E402
-from dictate.input_watch import (DBT_DEVNODES_CHANGED, PBT_APMRESUMEAUTOMATIC, RAWINPUT, RAWMOUSE,  # noqa: E402
+from voicewriter.audio import Mic  # noqa: E402
+from voicewriter.config import Settings  # noqa: E402
+from voicewriter.engine import Transcriber  # noqa: E402
+from voicewriter.input_watch import (DBT_DEVNODES_CHANGED, PBT_APMRESUMEAUTOMATIC, RAWINPUT, RAWMOUSE,  # noqa: E402
                                  WM_DEVICECHANGE, WM_POWERBROADCAST, InputWatch)
 
 user32 = ctypes.WinDLL("user32")
