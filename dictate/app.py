@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import QApplication
 
 from .audio import Mic
 from .config import DATA_DIR, HISTORY_DIR, LOG_PATH, Settings
-from .engine import Segmenter, Transcriber, prune_audio
+from .engine import COMMAND_MAX_S, Segmenter, Transcriber, prune_audio
 from .inject import Typer
 from .input_watch import InputWatch
 from .ui import STATE_LIVE, STATE_LOADING, STATE_OFF, Bar, build_menu
@@ -74,6 +74,7 @@ class Signals(QObject):
     failed_typing = pyqtSignal(str)
     toggle = pyqtSignal()
     resumed = pyqtSignal()
+    command = pyqtSignal(str)
 
 
 class Controller:
@@ -83,6 +84,8 @@ class Controller:
         self.sig = Signals()
         self.listening = self.settings.listen_on_start
         self._flush_pending = False
+        self._discard_pending = False
+        self._utt_live = self.listening  # whether the utterance in progress started while listening
         self.last_text = ""
 
         label = "+".join(part.capitalize() for part in self.settings.hotkey.split("+"))
@@ -94,6 +97,7 @@ class Controller:
         self.sig.status.connect(lambda s: s and self.bar.show_notice(s))
         self.sig.failed_typing.connect(self._on_failed_typing)
         self.sig.toggle.connect(self.toggle)
+        self.sig.command.connect(self._on_command)
         self.sig.resumed.connect(lambda: QTimer.singleShot(2000, self.bar.redock))
         self._bar_hwnd = 0
         self._behind = False
@@ -103,9 +107,9 @@ class Controller:
                                 on_devices_changed=lambda: self.mic.request_reopen("devices changed"),
                                 on_resume=self._on_resume)
         self.typer = Typer(lambda: int(self.bar.winId()), self.watch, self.sig.failed_typing.emit)
-        self.transcriber = Transcriber(self.settings, self.sig.preview.emit, self.sig.final.emit, self.sig.status.emit)
-        self.segmenter = Segmenter(self.settings, StreamingVad(), self.transcriber.submit_final,
-                                   self.transcriber.submit_preview)
+        self.transcriber = Transcriber(self.settings, self.sig.preview.emit, self.sig.final.emit, self.sig.status.emit,
+                                       self.sig.command.emit)
+        self.segmenter = Segmenter(self.settings, StreamingVad(), self._on_utterance, self._on_partial)
         self._health = QTimer()
         self._health.timeout.connect(self._check_health)
 
@@ -152,10 +156,31 @@ class Controller:
             if self._flush_pending:
                 self._flush_pending = False
                 self.segmenter.flush()
+            if self._discard_pending:
+                # Unmuted mid-speech: drop what was said while muted, start fresh from here.
+                self._discard_pending = False
+                self.segmenter.discard()
             self.bar.level = self.mic.level
-            self.bar.speaking = self.segmenter.speaking
-            if chunk is not None and self.listening:
+            self.bar.speaking = self.segmenter.speaking and self.listening
+            if chunk is not None:
+                if not self.segmenter.speaking:
+                    self._utt_live = self.listening
                 self.segmenter.feed(chunk)
+
+    def _on_utterance(self, utt_id: int, audio, vad_prob: float) -> None:
+        if self._utt_live:
+            self.transcriber.submit_final(utt_id, audio, vad_prob)
+        elif len(audio) <= COMMAND_MAX_S * 16000:
+            self.transcriber.submit_final(utt_id, audio, vad_prob, muted=True)
+
+    def _on_partial(self, utt_id: int, audio) -> None:
+        if self._utt_live and self.listening:
+            self.transcriber.submit_preview(utt_id, audio)
+
+    def _on_command(self, cmd: str) -> None:
+        if (cmd == "mute") == self.listening:
+            log.info("voice: %s", cmd)
+            self.toggle()
 
     def _on_resume(self) -> None:
         self.mic.request_reopen("woke from sleep", 2.0)
@@ -179,6 +204,8 @@ class Controller:
         self.listening = not self.listening
         if not self.listening:
             self._flush_pending = True  # whatever you were saying still gets typed
+        elif not self._utt_live:
+            self._discard_pending = True
         log.info("listening %s", "on" if self.listening else "off")
         self._refresh_state()
         self.bar.update()

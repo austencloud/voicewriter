@@ -140,7 +140,7 @@ class Bar(QWidget):
         # Status word and level meter.
         x = mic.right() + 10
         p.setFont(self.font_small)
-        status = {STATE_LIVE: "Listening", STATE_OFF: "Off", STATE_LOADING: "Starting"}[self.state]
+        status = {STATE_LIVE: "Listening", STATE_OFF: "Muted", STATE_LOADING: "Starting"}[self.state]
         p.setPen(LIVE if live else OFF)
         fm = QFontMetricsF(self.font_small)
         p.drawText(QRectF(x, 0, 90, h), Qt.AlignmentFlag.AlignVCenter, status)
@@ -232,7 +232,7 @@ class Bar(QWidget):
             return
         if self.state == STATE_OFF and not self.preview:
             p.setPen(HINT)
-            p.drawText(r, Qt.AlignmentFlag.AlignVCenter, f"Not listening. Click here or press {self.hotkey_label} to start.")
+            p.drawText(r, Qt.AlignmentFlag.AlignVCenter, f"Say \"unmute\", click here, or press {self.hotkey_label} to start.")
             return
 
         # Newest words stay visible: committed text dims with age, the live preview trails it.

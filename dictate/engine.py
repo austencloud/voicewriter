@@ -73,6 +73,10 @@ class Segmenter:
             self._emit(self._utt)
         self._reset()
 
+    def discard(self) -> None:
+        """Drop whatever is in progress without sending it anywhere."""
+        self._reset()
+
     def _reset(self) -> None:
         self._utt = []
         self._speaking = False
@@ -161,15 +165,28 @@ def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# The only two things Dictate obeys, and only when said on their own between pauses.
+# "I need to mute the TV" is just words and gets typed.
+_COMMANDS = {"mute": "mute", "unmute": "unmute", "un mute": "unmute"}
+COMMAND_MAX_S = 3.0  # utterances longer than this are never checked while muted
+
+
+def command_of(text: str) -> str | None:
+    words = re.sub(r"[^a-z ]+", " ", text.lower().replace("-", " "))
+    return _COMMANDS.get(" ".join(words.split()))
+
+
 class Transcriber:
     def __init__(self, settings: Settings,
                  on_preview: Callable[[int, str], None],
                  on_final: Callable[[int, str], None],
-                 on_status: Callable[[str], None]):
+                 on_status: Callable[[str], None],
+                 on_command: Callable[[str], None] = lambda cmd: None):
         self.settings = settings
         self.on_preview = on_preview
         self.on_final = on_final
         self.on_status = on_status
+        self.on_command = on_command
         self._finals: collections.deque = collections.deque()
         self._preview: tuple[int, np.ndarray] | None = None
         self._done_id = 0
@@ -183,9 +200,10 @@ class Transcriber:
     def start(self) -> None:
         self._thread.start()
 
-    def submit_final(self, utt_id: int, audio: np.ndarray, vad_prob: float) -> None:
+    def submit_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False) -> None:
+        """muted=True only listens for "unmute": nothing is typed, shown or saved."""
         with self._cv:
-            self._finals.append((utt_id, audio, vad_prob))
+            self._finals.append((utt_id, audio, vad_prob, muted))
             self._submitted.append(time.monotonic())
             self._cv.notify()
 
@@ -261,9 +279,10 @@ class Transcriber:
             except Exception:
                 log.exception("%s transcription failed", kind)
                 if kind == "final":
-                    _save_failed(job[1])
-                    self.on_status("A sentence failed; its audio is saved in history")
                     self._done_id = max(self._done_id, job[0])
+                    if not job[3]:  # never keep audio heard while muted
+                        _save_failed(job[1])
+                        self.on_status("A sentence failed; its audio is saved in history")
 
     def _transcribe(self, model, audio: np.ndarray, beam: int) -> tuple[str, list]:
         segments, _ = model.transcribe(
@@ -278,16 +297,29 @@ class Transcriber:
         if utt_id > self._done_id:
             self.on_preview(utt_id, text)
 
-    def _do_final(self, utt_id: int, audio: np.ndarray, vad_prob: float) -> None:
+    def _do_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False) -> None:
         now = time.time()
         if now - self._last_final > 120:
             self._context = ""
+        if muted:
+            # No prompt: past sentences shouldn't nudge a one-word clip toward other words.
+            segments, _ = self.final_model.transcribe(audio, language=self.settings.language, beam_size=5,
+                                                      condition_on_previous_text=False, without_timestamps=True)
+            heard = command_of(" ".join(s.text for s in segments))
+            self._done_id = max(self._done_id, utt_id)
+            if heard == "unmute":
+                log.info("final #%d while muted: unmute", utt_id)
+                self.on_command("unmute")
+            return
         t = time.time()
         text, segments = self._transcribe(self.final_model, audio, beam=5)
         took = time.time() - t
         reason = None
+        cmd = command_of(text)
         if not text:
             reason = "empty"
+        elif cmd:
+            reason = f"command: {cmd}"
         elif text.lower().strip(" !.,") in {p.strip(" !.,") for p in _PHANTOMS} and vad_prob < 0.75:
             reason = "phantom"
         _record(text, audio, reason)
@@ -296,6 +328,8 @@ class Transcriber:
         self._done_id = max(self._done_id, utt_id)
         if reason:
             self.on_final(utt_id, "")
+            if cmd:
+                self.on_command(cmd)
             return
         self._context = (self._context + " " + text)[-300:]
         self._last_final = now
