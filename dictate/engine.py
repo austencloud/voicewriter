@@ -173,6 +173,7 @@ class Transcriber:
         self._finals: collections.deque = collections.deque()
         self._preview: tuple[int, np.ndarray] | None = None
         self._done_id = 0
+        self._submitted: collections.deque = collections.deque()  # one entry per final not yet finished
         self._cv = threading.Condition()
         self._context = ""
         self._last_final = 0.0
@@ -185,6 +186,7 @@ class Transcriber:
     def submit_final(self, utt_id: int, audio: np.ndarray, vad_prob: float) -> None:
         with self._cv:
             self._finals.append((utt_id, audio, vad_prob))
+            self._submitted.append(time.monotonic())
             self._cv.notify()
 
     def submit_preview(self, utt_id: int, audio: np.ndarray) -> None:
@@ -192,9 +194,12 @@ class Transcriber:
             self._preview = (utt_id, audio[-RATE * 28:])
             self._cv.notify()
 
-    def backlog(self) -> int:
+    def waiting(self) -> tuple[int, float]:
+        """Sentences spoken but not typed yet, and how long the oldest has waited."""
         with self._cv:
-            return len(self._finals)
+            if not self._submitted:
+                return 0, 0.0
+            return len(self._submitted), time.monotonic() - self._submitted[0]
 
     def _load(self):
         from .gpu import add_cuda_dll_dirs
@@ -246,7 +251,11 @@ class Transcriber:
                     self._preview = None
             try:
                 if kind == "final":
-                    self._do_final(*job)
+                    try:
+                        self._do_final(*job)
+                    finally:
+                        with self._cv:
+                            self._submitted.popleft()
                 elif job[0] > self._done_id:
                     self._do_preview(*job)
             except Exception:

@@ -34,6 +34,8 @@ class Bar(QWidget):
         self.state = STATE_LOADING
         self.notice = ""
         self.notice_until = 0.0
+        self.alert = ""  # stays until cleared, e.g. no microphone
+        self.badge = ""  # small pill on the right, e.g. GPU behind
         self.committed = ""
         self.committed_at = 0.0
         self.preview = ""
@@ -57,6 +59,10 @@ class Bar(QWidget):
         self._appbar = appbar.AppBar(hwnd)
         self._appbar.register(self._height_px())
 
+    def redock(self) -> None:
+        if self._appbar:
+            self._appbar.place(self._height_px())
+
     def undock(self) -> None:
         if self._appbar:
             self._appbar.remove()
@@ -70,7 +76,7 @@ class Bar(QWidget):
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == appbar.CALLBACK_MSG:
                 if msg.wParam == appbar.ABN_POSCHANGED:
-                    self._appbar.place(self._height_px())
+                    self.redock()
                 elif msg.wParam == appbar.ABN_FULLSCREENAPP:
                     self._appbar.set_topmost(not msg.lParam)
             elif msg.message in (0x007E, 0x02E0):  # WM_DISPLAYCHANGE, WM_DPICHANGED
@@ -145,6 +151,8 @@ class Bar(QWidget):
 
         p.fillRect(QRectF(x - 10, h * 0.25, 1, h * 0.5), EDGE)
         right = self._menu_rect().left() - 8
+        if self.badge:
+            right = self._paint_badge(p, right, h) - 12
         self._paint_text(p, QRectF(x, 0, right - x, h - 2))
         self._paint_menu_dots(p, self._menu_rect())
         p.end()
@@ -183,6 +191,21 @@ class Bar(QWidget):
             p.setPen(QPen(fg, 1.8 * s, cap=Qt.PenCapStyle.RoundCap))
             p.drawLine(QPointF(c.x() - 7 * s, c.y() - 8 * s), QPointF(c.x() + 7 * s, c.y() + 8 * s))
 
+    def _paint_badge(self, p: QPainter, right: float, h: float) -> float:
+        """Amber pill on the right, e.g. while the GPU is behind. Returns its left edge."""
+        p.setFont(self.font_small)
+        fm = QFontMetricsF(self.font_small)
+        w = fm.horizontalAdvance(self.badge) + 20
+        r = QRectF(right - w, h * 0.2, w, h * 0.6)
+        fill = QColor(WARN)
+        fill.setAlphaF(0.16)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+        p.setPen(WARN)
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.badge)
+        return r.left()
+
     def _paint_level(self, p: QPainter, r: QRectF) -> None:
         level = min(1.0, self.level * 30)
         n = 4
@@ -198,9 +221,10 @@ class Bar(QWidget):
         now = time.monotonic()
         p.setFont(self.font_main)
         fm = QFontMetricsF(self.font_main)
-        if self.notice and now < self.notice_until:
+        message = self.notice if self.notice and now < self.notice_until else self.alert
+        if message:
             p.setPen(WARN)
-            p.drawText(r, Qt.AlignmentFlag.AlignVCenter, fm.elidedText(self.notice, Qt.TextElideMode.ElideRight, r.width()))
+            p.drawText(r, Qt.AlignmentFlag.AlignVCenter, fm.elidedText(message, Qt.TextElideMode.ElideRight, r.width()))
             return
         if self.state == STATE_LOADING:
             p.setPen(HINT)

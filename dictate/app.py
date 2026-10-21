@@ -12,7 +12,7 @@ import time
 import winreg
 from datetime import datetime
 
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication
 
@@ -73,6 +73,7 @@ class Signals(QObject):
     status = pyqtSignal(str)
     failed_typing = pyqtSignal(str)
     toggle = pyqtSignal()
+    resumed = pyqtSignal()
 
 
 class Controller:
@@ -93,16 +94,25 @@ class Controller:
         self.sig.status.connect(lambda s: s and self.bar.show_notice(s))
         self.sig.failed_typing.connect(self._on_failed_typing)
         self.sig.toggle.connect(self.toggle)
+        self.sig.resumed.connect(lambda: QTimer.singleShot(2000, self.bar.redock))
+        self._bar_hwnd = 0
+        self._behind = False
 
-        self.watch = InputWatch(self.settings.hotkey, self.sig.toggle.emit)
+        self.mic = Mic(self.settings.microphone)
+        self.watch = InputWatch(self.settings.hotkey, self.sig.toggle.emit, own_hwnd=lambda: self._bar_hwnd,
+                                on_devices_changed=lambda: self.mic.request_reopen("devices changed"),
+                                on_resume=self._on_resume)
         self.typer = Typer(lambda: int(self.bar.winId()), self.watch, self.sig.failed_typing.emit)
         self.transcriber = Transcriber(self.settings, self.sig.preview.emit, self.sig.final.emit, self.sig.status.emit)
         self.segmenter = Segmenter(self.settings, StreamingVad(), self.transcriber.submit_final,
                                    self.transcriber.submit_preview)
-        self.mic = Mic(self.settings.microphone)
+        self._health = QTimer()
+        self._health.timeout.connect(self._check_health)
 
     def start(self) -> None:
         self.bar.dock()
+        self._bar_hwnd = int(self.bar.winId())
+        self._health.start(500)
         self.bar.set_state(STATE_LOADING)
         if not self.watch.hotkey_ok:
             self.bar.show_notice(f"{self.bar.hotkey_label} is used by another program; click the bar instead.", 10)
@@ -129,11 +139,16 @@ class Controller:
 
     def _pump(self) -> None:
         """Moves audio from the microphone into the segmenter. Never blocks the microphone."""
+        generation = self.mic.generation
         while True:
             try:
                 chunk = self.mic.chunks.get(timeout=0.2)
             except queue.Empty:
                 chunk = None
+            if self.mic.generation != generation:
+                # The mic was reopened (unplug, sleep): type what was cut off instead of holding it.
+                generation = self.mic.generation
+                self._flush_pending = True
             if self._flush_pending:
                 self._flush_pending = False
                 self.segmenter.flush()
@@ -141,8 +156,24 @@ class Controller:
             self.bar.speaking = self.segmenter.speaking
             if chunk is not None and self.listening:
                 self.segmenter.feed(chunk)
-            if self.mic.error and self.bar.notice != self.mic.error:
-                self.sig.status.emit(self.mic.error)
+
+    def _on_resume(self) -> None:
+        self.mic.request_reopen("woke from sleep", 2.0)
+        self.sig.resumed.emit()
+
+    def _check_health(self) -> None:
+        self.bar.alert = self.mic.error or ""
+        if not self.transcriber.ready.is_set():
+            return
+        count, age = self.transcriber.waiting()
+        behind = count >= 2 or age > 3.0
+        if behind:
+            self.bar.badge = f"GPU busy · {count} waiting" if count > 1 else "GPU busy · catching up"
+        else:
+            self.bar.badge = ""
+        if behind != self._behind:
+            self._behind = behind
+            log.info("GPU %s (%d waiting, oldest %.1fs)", "behind" if behind else "caught up", count, age)
 
     def toggle(self) -> None:
         self.listening = not self.listening
@@ -186,7 +217,7 @@ class Controller:
     def _set_mic(self, name) -> None:
         self.settings.microphone = name
         self.settings.save()
-        threading.Thread(target=self.mic.set_device, args=(name,), daemon=True).start()
+        self.mic.set_device(name)
 
     def _copy_last(self) -> None:
         if self.last_text:
