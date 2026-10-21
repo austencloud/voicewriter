@@ -17,8 +17,9 @@ from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication
 
 from .audio import Mic
-from .config import DATA_DIR, HISTORY_DIR, LOG_PATH, Settings
+from .config import DATA_DIR, HISTORY_DIR, LOG_PATH, WORDS_PATH, Settings, read_words, write_words
 from .engine import COMMAND_MAX_S, Segmenter, Transcriber, prune_audio
+from .guard import close_rivals
 from .inject import Typer
 from .input_watch import InputWatch
 from .ui import STATE_LIVE, STATE_LOADING, STATE_OFF, Bar, build_menu
@@ -101,6 +102,8 @@ class Controller:
         self.sig.resumed.connect(lambda: QTimer.singleShot(2000, self.bar.redock))
         self._bar_hwnd = 0
         self._behind = False
+        self._words_mtime = 0.0
+        self._sync_words(announce=False)
 
         self.mic = Mic(self.settings.microphone)
         self.watch = InputWatch(self.settings.hotkey, self.sig.toggle.emit, own_hwnd=lambda: self._bar_hwnd,
@@ -124,6 +127,7 @@ class Controller:
         self.mic.start()
         threading.Thread(target=self._pump, name="pump", daemon=True).start()
         threading.Thread(target=self._wait_ready, name="ready", daemon=True).start()
+        threading.Thread(target=self._guard, name="guard", daemon=True).start()
         prune_audio(self.settings.keep_audio_days)
 
     def _wait_ready(self) -> None:
@@ -180,13 +184,45 @@ class Controller:
     def _on_command(self, cmd: str) -> None:
         if (cmd == "mute") == self.listening:
             log.info("voice: %s", cmd)
-            self.toggle()
+            # Anything you started saying after "unmute" (while it was being recognised) is kept.
+            self.toggle(keep_speech=True)
+
+    def _guard(self) -> None:
+        """Every 2 s, close Voice Access or Talon if one has started."""
+        while True:
+            try:
+                closed = close_rivals()
+                if closed:
+                    self.sig.status.emit(f"Closed {' and '.join(closed)} so your words aren't typed twice.")
+            except Exception:
+                log.exception("guard check failed")
+            time.sleep(2)
 
     def _on_resume(self) -> None:
         self.mic.request_reopen("woke from sleep", 2.0)
         self.sig.resumed.emit()
 
+    def _sync_words(self, announce: bool = True) -> None:
+        """Picks up the word list whenever its file is saved."""
+        try:
+            if not WORDS_PATH.exists():
+                write_words(self.settings.vocabulary)
+            mtime = WORDS_PATH.stat().st_mtime
+            if mtime == self._words_mtime:
+                return
+            self._words_mtime = mtime
+            words = read_words()
+        except OSError:
+            return
+        if words != self.settings.vocabulary:
+            self.settings.vocabulary = words
+            self.settings.save()
+            log.info("word list updated: %d entries", len(words))
+            if announce:
+                self.bar.show_notice(f"Word list updated ({len(words)} words).", 3)
+
     def _check_health(self) -> None:
+        self._sync_words()
         self.bar.alert = self.mic.error or ""
         if not self.transcriber.ready.is_set():
             return
@@ -200,10 +236,12 @@ class Controller:
             self._behind = behind
             log.info("GPU %s (%d waiting, oldest %.1fs)", "behind" if behind else "caught up", count, age)
 
-    def toggle(self) -> None:
+    def toggle(self, keep_speech: bool = False) -> None:
         self.listening = not self.listening
         if not self.listening:
             self._flush_pending = True  # whatever you were saying still gets typed
+        elif keep_speech:
+            self._utt_live = True
         elif not self._utt_live:
             self._discard_pending = True
         log.info("listening %s", "on" if self.listening else "off")
@@ -232,6 +270,7 @@ class Controller:
         items = [
             ("Copy last sentence", self._copy_last),
             ("Open today's history", self._open_history),
+            ("Edit word list…", lambda: os.startfile(WORDS_PATH)),
             ("-",),
             ("Microphone", mic_items),
             ("Start when Windows starts", lambda: set_starts_with_windows(not starts_with_windows()),

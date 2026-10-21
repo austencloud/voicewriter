@@ -10,6 +10,20 @@ SETTINGS_PATH = DATA_DIR / "settings.json"
 HISTORY_DIR = DATA_DIR / "history"
 AUDIO_DIR = DATA_DIR / "audio"
 LOG_PATH = DATA_DIR / "dictate.log"
+# The word list, one word or phrase per line. Opened from the bar's menu; changes apply on save.
+WORDS_PATH = DATA_DIR / "words.txt"
+WORDS_HEADER = ("# Words and names Dictate should spell your way, one per line.\n"
+                "# Save this file and the next sentence uses the new list.\n")
+
+
+def read_words() -> list[str]:
+    lines = WORDS_PATH.read_text(encoding="utf-8-sig").splitlines()
+    return [w.strip() for w in lines if w.strip() and not w.strip().startswith("#")]
+
+
+def write_words(words: list[str]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    WORDS_PATH.write_text(WORDS_HEADER + "\n" + "\n".join(words) + "\n", encoding="utf-8")
 
 
 @dataclass

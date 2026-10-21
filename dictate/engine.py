@@ -243,9 +243,10 @@ class Transcriber:
             return final, final
 
     def _prompt(self) -> str:
-        vocab = ", ".join(self.settings.vocabulary)
-        prompt = (vocab + ". " if vocab else "") + self._context
-        return prompt[-400:]
+        # The word list comes first and is never pushed out by recent sentences.
+        vocab = ", ".join(self.settings.vocabulary)[:300]
+        vocab = vocab + ". " if vocab else ""
+        return vocab + self._context[-(450 - len(vocab)):]
 
     def _run(self) -> None:
         t = time.time()

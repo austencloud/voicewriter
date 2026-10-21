@@ -48,9 +48,14 @@ def clip(name: str) -> np.ndarray:
         return np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
 
 
-gap = np.zeros(int(16000 * 1.6), np.float32)
-script = ["cmd_s1", "cmd_mute", "cmd_hidden", "cmd_unmute", "cmd_s2"]
-audio = np.concatenate([gap] + [x for name in script for x in (clip(name), gap)] + [gap])
+def gap(s: float) -> np.ndarray:
+    return np.zeros(int(16000 * s), np.float32)
+
+
+# After "Unmute." the next sentence starts 0.8 s later: just past the 0.7 s pause that ends
+# "Unmute.", so it's already under way when the command is recognised. It must still be typed.
+script = [("cmd_s1", 1.6), ("cmd_mute", 1.6), ("cmd_hidden", 1.6), ("cmd_unmute", 0.8), ("cmd_s2", 1.6)]
+audio = np.concatenate([gap(1.6)] + [x for name, pause in script for x in (clip(name), gap(pause))] + [gap(1.6)])
 
 
 class FakeMic:
@@ -74,8 +79,8 @@ ctl.typer.type = typed.append
 orig_toggle = ctl.toggle
 
 
-def toggle():
-    orig_toggle()
+def toggle(**kw):
+    orig_toggle(**kw)
     states.append((round(time.time() - t0, 1), ctl.listening))
 
 
@@ -111,7 +116,7 @@ print("listening changes (seconds in, on?):", states)
 joined = " ".join(typed).lower()
 check(len(typed) == 2, "exactly two sentences typed")
 check("first sentence" in joined, "sentence before mute typed")
-check("mute the tv" in joined, "sentence containing 'mute' typed as words")
+check("mute the tv before the show" in joined, "sentence started right after 'unmute' typed whole")
 check("should not" not in joined, "sentence said while muted not typed")
 check(all(command_of(t) is None for t in typed), "commands never typed")
 check([on for _, on in states] == [False, True], "muted by voice, then unmuted by voice")
