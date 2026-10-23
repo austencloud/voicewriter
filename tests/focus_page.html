@@ -1,0 +1,30 @@
+<!doctype html>
+<title>VWPROBE</title>
+<!-- Page for focus_test.py. When the test presses F24 it waits 1.5 s, then moves focus
+     to each target in turn, 1.5 s apart, and shows what landed where. -->
+<input id="i">
+<textarea id="t"></textarea>
+<div id="c" contenteditable style="border:1px solid; min-height:20px"></div>
+<div id="pm" contenteditable role="textbox" style="border:1px solid; min-height:20px"></div>
+<input id="ro" readonly value="read only">
+<button id="b">button</button>
+<pre id="out"></pre>
+<div style="height:5000px"></div>
+<script>
+  const steps = ["body", "i", "t", "c", "pm", "ro", "b"];
+  addEventListener("keydown", (e) => {
+    if (e.key !== "F24") return;
+    let k = 0;
+    setTimeout(function step() {
+      const id = steps[k++];
+      if (id === "body") document.activeElement.blur();
+      else document.getElementById(id).focus();
+      if (k < steps.length) setTimeout(step, 1500);
+      else setTimeout(() => {
+        document.activeElement.blur();
+        out.textContent = JSON.stringify({ scrollY, i: i.value, t: t.value, c: c.textContent,
+                                           pm: pm.textContent, ro: ro.value });
+      }, 1500);
+    }, 1500);
+  });
+</script>

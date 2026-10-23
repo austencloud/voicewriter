@@ -83,7 +83,7 @@ class Signals(QObject):
     preview = pyqtSignal(int, str)
     final = pyqtSignal(int, str)
     status = pyqtSignal(str)
-    failed_typing = pyqtSignal(str)
+    failed_typing = pyqtSignal(str, str)
     toggle = pyqtSignal()
     resumed = pyqtSignal()
     command = pyqtSignal(str)
@@ -114,6 +114,7 @@ class Controller:
         self._bar_hwnd = 0
         self._behind = False
         self._words_mtime = 0.0
+        self._clip_run, self._clip_run_at = "", 0.0
         self._sync_words(announce=False)
 
         self.mic = Mic(self.settings.microphone)
@@ -289,9 +290,18 @@ class Controller:
         elif self.bar.notice.endswith("…"):
             self.bar.show_notice("", 0.01)
 
-    def _on_failed_typing(self, text: str) -> None:
-        QGuiApplication.clipboard().setText(text)
-        self.bar.show_notice("Couldn't type into that window, so the text is on your clipboard. Paste with Ctrl+V.", 8)
+    def _on_failed_typing(self, text: str, reason: str) -> None:
+        clipboard = QGuiApplication.clipboard()
+        if reason != "no_field":
+            clipboard.setText(text)
+            self.bar.show_notice("Couldn't type into that window, so the text is on your clipboard. Paste with Ctrl+V.", 8)
+            return
+        # Several sentences said before clicking into a box all go on the clipboard together.
+        recent = time.monotonic() - self._clip_run_at < 120 and clipboard.text() == self._clip_run
+        self._clip_run = f"{self._clip_run} {text}" if recent else text
+        self._clip_run_at = time.monotonic()
+        clipboard.setText(self._clip_run)
+        self.bar.show_notice("No text box selected, so it went to your clipboard. Click a box and press Ctrl+V.", 8)
 
     def show_menu(self, pos) -> None:
         mics = Mic.input_devices()

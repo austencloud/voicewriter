@@ -20,6 +20,7 @@ run from Hugging Face, straight onto your PC, under each project's own license.
 | [sounddevice](https://github.com/spatialaudio/python-sounddevice) / PortAudio | Microphone input | MIT |
 | [python-soxr](https://github.com/dofuuz/python-soxr) | Resampling microphone audio | LGPL-2.1-or-later |
 | [NumPy](https://numpy.org) | Audio math | BSD-3-Clause and others |
+| [comtypes](https://github.com/enthought/comtypes) | Asks Windows UI Automation whether a text box has focus | MIT |
 | [PyAV](https://github.com/PyAV-Org/PyAV) | Audio decoding (faster-whisper dependency) | BSD-3-Clause |
 | [huggingface_hub](https://github.com/huggingface/huggingface_hub), tokenizers, hf-xet | Model download and tokenizing | Apache-2.0 |
 | [uv](https://github.com/astral-sh/uv) | Installs Python and the packages during setup (bundled in the installer) | MIT or Apache-2.0 |

@@ -12,6 +12,8 @@ import queue
 import threading
 import time
 
+from .focus import takes_text
+
 log = logging.getLogger("voicewriter.inject")
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
@@ -121,7 +123,7 @@ class Typer:
                 self._type_one(text)
             except Exception:
                 log.exception("typing failed")
-                self._on_failed(text)
+                self._on_failed(text, "error")
 
     def _type_one(self, text: str) -> None:
         # Wait for you to let go of Ctrl/Alt/Win so the letters don't become shortcuts.
@@ -130,16 +132,20 @@ class Typer:
             time.sleep(0.02)
         hwnd = user32.GetForegroundWindow()
         if not hwnd or hwnd == self._own():
-            self._on_failed(text)
+            self._on_failed(text, "window")
             return
         if _blocked(hwnd):
             # Counted in the log so "should VoiceWriter run as admin?" can be answered from real use.
             log.info("admin window: sentence sent to the clipboard instead")
-            self._on_failed(text)
+            self._on_failed(text, "window")
+            return
+        if not takes_text():
+            # Typing here would press keys on the page: spaces scroll it, letters can trigger shortcuts.
+            self._on_failed(text, "no_field")
             return
         if self._watch.should_space():
             text = " " + text
         if send_text(text):
             self._watch.typed_dictation()
         else:
-            self._on_failed(text.strip())
+            self._on_failed(text.strip(), "error")

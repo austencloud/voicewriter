@@ -52,6 +52,11 @@ code-signed. Choose "More info", then "Run anyway".
 - **Admin windows:** Windows doesn't let normal programs type into windows
   running as administrator. For those, VoiceWriter puts the sentence on the
   clipboard and tells you so on the bar; press Ctrl+V.
+- **No text box selected:** in Chrome, Edge and apps built on them, VoiceWriter
+  types only when a text box has focus. Otherwise the keys would land on the
+  page itself, where every space scrolls it down. What you said goes to the
+  clipboard instead (several sentences in a row are kept together), and the
+  bar tells you; click a box and press Ctrl+V.
 - **Recovers by itself:** the microphone reopens after an unplug, a device
   change, or waking from sleep. If VoiceWriter ever crashes it restarts.
 - **Other dictation programs:** if Windows Voice Access or Talon is running

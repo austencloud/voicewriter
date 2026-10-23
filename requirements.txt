@@ -3,6 +3,7 @@ av==19.0.2
 cffi==2.1.1
 click==8.5.0
 colorama==0.4.6
+comtypes==1.4.17
 ctranslate2==4.8.3
 faster-whisper==1.2.1
 filelock==4.2.4
