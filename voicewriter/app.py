@@ -20,7 +20,8 @@ from .audio import Mic
 from .config import DATA_DIR, HISTORY_DIR, LOG_PATH, WORDS_PATH, Settings, read_words, write_words
 from .engine import COMMAND_MAX_S, Segmenter, Transcriber, prune_audio
 from .guard import close_rivals, running_rivals
-from .inject import Typer
+from .claude_target import ClaudeTarget
+from .inject import Typer, send_text
 from .input_watch import InputWatch
 from .ui import STATE_LIVE, STATE_LOADING, STATE_OFF, Bar, build_menu
 from .vad import StreamingVad
@@ -121,7 +122,9 @@ class Controller:
         self.watch = InputWatch(self.settings.hotkey, self.sig.toggle.emit, own_hwnd=lambda: self._bar_hwnd,
                                 on_devices_changed=lambda: self.mic.request_reopen("devices changed"),
                                 on_resume=self._on_resume)
-        self.typer = Typer(lambda: int(self.bar.winId()), self.watch, self.sig.failed_typing.emit)
+        self.claude = ClaudeTarget()
+        self.typer = Typer(lambda: int(self.bar.winId()), self.watch, self.sig.failed_typing.emit,
+                           lambda text: self.settings.send_to_claude and self.claude.send(text, send_text))
         self.transcriber = Transcriber(self.settings, self.sig.preview.emit, self.sig.final.emit, self.sig.status.emit,
                                        self.sig.command.emit)
         self.segmenter = Segmenter(self.settings, StreamingVad(), self._on_utterance, self._on_partial)
@@ -218,6 +221,10 @@ class Controller:
             except Exception:
                 log.exception("guard check failed")
             time.sleep(2)
+
+    def _toggle_send_to_claude(self) -> None:
+        self.settings.send_to_claude = not self.settings.send_to_claude
+        self.settings.save()
 
     def _toggle_close_others(self) -> None:
         self.settings.close_other_dictation = not self.settings.close_other_dictation
@@ -316,6 +323,8 @@ class Controller:
             ("Microphone", mic_items),
             ("Start when Windows starts", lambda: set_starts_with_windows(not starts_with_windows()),
              starts_with_windows()),
+            ("Send to Claude when no text box is selected", self._toggle_send_to_claude,
+             self.settings.send_to_claude),
             ("Close Voice Access and Talon automatically", self._toggle_close_others,
              self.settings.close_other_dictation),
             ("-",),

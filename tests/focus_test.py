@@ -65,7 +65,7 @@ if not hwnd or not bring_forward(hwnd):
     sys.exit("FAIL could not bring the VWPROBE window forward")
 # If Chrome's address bar or tab strip has focus, F6 cycles it into the page, where the test happens.
 for _ in range(6):
-    if focus._client().GetFocusedElement().CurrentControlType == 50030:  # the page document
+    if focus.client().GetFocusedElement().CurrentControlType == 50030:  # the page document
         break
     user32.keybd_event(0x75, 0, 0, 0)
     user32.keybd_event(0x75, 0, 2, 0)

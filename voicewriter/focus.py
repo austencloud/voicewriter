@@ -22,7 +22,7 @@ _uia = None
 _U = None
 
 
-def _client():
+def client():
     """The UI Automation client for this thread, made on first use (COM objects stay on their thread)."""
     global _uia, _U
     if _uia is None:
@@ -34,6 +34,12 @@ def _client():
         _U = U
         _uia = comtypes.client.CreateObject(U.CUIAutomation, interface=U.IUIAutomation)
     return _uia
+
+
+def uia_types():
+    """The generated UIAutomationClient module (property ids, interfaces), once client() has run."""
+    client()
+    return _U
 
 
 def _read(el) -> bool | None:
@@ -49,7 +55,7 @@ def _read(el) -> bool | None:
 def takes_text() -> bool:
     """False only when a Chromium window has focus on something that isn't a text field."""
     try:
-        uia = _client()
+        uia = client()
         for attempt in range(4):
             el = uia.GetFocusedElement()
             if el.CurrentFrameworkId != "Chrome":

@@ -54,9 +54,15 @@ code-signed. Choose "More info", then "Run anyway".
   clipboard and tells you so on the bar; press Ctrl+V.
 - **No text box selected:** in Chrome, Edge and apps built on them, VoiceWriter
   types only when a text box has focus. Otherwise the keys would land on the
-  page itself, where every space scrolls it down. What you said goes to the
-  clipboard instead (several sentences in a row are kept together), and the
-  bar tells you; click a box and press Ctrl+V.
+  page itself, where every space scrolls it down.
+- **Goes to Claude:** when nothing editable is selected (you're reading or
+  scrolling a page, or clicked the desktop) and the Claude desktop app is open
+  and mostly in view on any monitor, the sentence goes into Claude's message
+  box, and the window you were in gets focus back. Turn this off in the menu
+  ("Send to Claude when no text box is selected").
+- **Otherwise, the clipboard:** with Claude closed or hidden, what you said goes
+  to the clipboard (several sentences in a row are kept together), and the bar
+  tells you; click a box and press Ctrl+V.
 - **Recovers by itself:** the microphone reopens after an unplug, a device
   change, or waking from sleep. If VoiceWriter ever crashes it restarts.
 - **Other dictation programs:** if Windows Voice Access or Talon is running

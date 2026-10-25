@@ -65,6 +65,8 @@ class Settings:
     # Close Voice Access and Talon whenever they start, so words are never typed twice.
     # Off by default: some people rely on Voice Access to control their PC.
     close_other_dictation: bool = False
+    # A sentence said with no text box selected goes to the Claude app's message box, if it's open and in view.
+    send_to_claude: bool = True
     listen_on_start: bool = True
     hotkey: str = "ctrl+shift+space"
     bar_height: int = 40

@@ -21,6 +21,8 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN = 0x10, 0x11, 0x12, 0x5B, 0x5C
+# The desktop and taskbar: typed letters there select icons or open things.
+SHELL_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -44,6 +46,7 @@ class INPUT(ctypes.Structure):
 user32.SendInput.argtypes = (wt.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
 user32.SendInput.restype = wt.UINT
 user32.GetForegroundWindow.restype = wt.HWND
+user32.GetClassNameW.argtypes = (wt.HWND, wt.LPWSTR, ctypes.c_int)
 user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
 user32.GetAsyncKeyState.restype = ctypes.c_short
 
@@ -83,6 +86,12 @@ def _blocked(hwnd) -> bool:
     return _elevated(pid.value)
 
 
+def _class_name(hwnd) -> str:
+    buf = ctypes.create_unicode_buffer(64)
+    user32.GetClassNameW(hwnd, buf, len(buf))
+    return buf.value
+
+
 def _modifiers_down() -> bool:
     return any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in (VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN))
 
@@ -104,12 +113,17 @@ def send_text(text: str) -> bool:
 
 
 class Typer:
-    """Types sentences in order on its own thread, spacing them like one paragraph."""
+    """Types sentences in order on its own thread, spacing them like one paragraph.
 
-    def __init__(self, own_hwnd_getter, watch, on_failed):
+    When a sentence can't be typed where you are, `elsewhere(text)` gets a chance to
+    put it somewhere useful (the Claude app) before it falls back to the clipboard.
+    """
+
+    def __init__(self, own_hwnd_getter, watch, on_failed, elsewhere=lambda text: False):
         self._own = own_hwnd_getter
         self._watch = watch
         self._on_failed = on_failed
+        self._elsewhere = elsewhere
         self._q: "queue.SimpleQueue[str]" = queue.SimpleQueue()
         threading.Thread(target=self._run, name="typer", daemon=True).start()
 
@@ -131,17 +145,17 @@ class Typer:
         while _modifiers_down() and time.monotonic() < deadline:
             time.sleep(0.02)
         hwnd = user32.GetForegroundWindow()
-        if not hwnd or hwnd == self._own():
-            self._on_failed(text, "window")
+        if not hwnd or hwnd == self._own() or _class_name(hwnd) in SHELL_CLASSES:
+            self._send_elsewhere(text, "no_field")
             return
         if _blocked(hwnd):
             # Counted in the log so "should VoiceWriter run as admin?" can be answered from real use.
-            log.info("admin window: sentence sent to the clipboard instead")
-            self._on_failed(text, "window")
+            log.info("admin window: can't type there")
+            self._send_elsewhere(text, "window")
             return
         if not takes_text():
             # Typing here would press keys on the page: spaces scroll it, letters can trigger shortcuts.
-            self._on_failed(text, "no_field")
+            self._send_elsewhere(text, "no_field")
             return
         if self._watch.should_space():
             text = " " + text
@@ -149,3 +163,7 @@ class Typer:
             self._watch.typed_dictation()
         else:
             self._on_failed(text.strip(), "error")
+
+    def _send_elsewhere(self, text: str, reason: str) -> None:
+        if not self._elsewhere(text):
+            self._on_failed(text, reason)
