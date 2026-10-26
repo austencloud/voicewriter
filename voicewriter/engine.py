@@ -328,6 +328,12 @@ class Transcriber:
             return
         t = time.time()
         text, segments = self._transcribe(self.final_model, audio, beam=5)
+        if bare(text) and self._context:
+            # Whisper copies the style of its prompt. One sentence that came back with no punctuation would
+            # make every sentence after it bare too, so try this one again with only the word list as prompt.
+            log.info("final #%d came back unpunctuated; retrying without context", utt_id)
+            self._context = ""
+            text, segments = self._transcribe(self.final_model, audio, beam=5)
         took = time.time() - t
         reason = None
         cmd = command_of(text)
@@ -346,9 +352,15 @@ class Transcriber:
             if cmd:
                 self.on_command(cmd)
             return
-        self._context = (self._context + " " + text)[-300:]
+        if not bare(text):
+            self._context = (self._context + " " + text)[-300:]
         self._last_final = now
         self.on_final(utt_id, text)
+
+
+def bare(text: str) -> bool:
+    """A sentence of several words with no punctuation at all: Whisper has dropped into its unpunctuated style."""
+    return len(text.split()) >= 5 and not re.search(r"[.!?,;:]", text)
 
 
 def _record(text: str, audio: np.ndarray, reason: str | None) -> None:
