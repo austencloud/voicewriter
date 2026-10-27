@@ -86,6 +86,13 @@ Your history, saved audio, word list and settings are kept in
 audio to keep. Quit VoiceWriter before editing it. The log is
 `voicewriter.log` in the same folder.
 
+A sentence's closing `.`, `?` or `!` waits until you go on. If the next words
+carry the sentence on, it becomes a comma or nothing, so pausing to think in
+the middle of a sentence doesn't split it in two. After 2.5 seconds of quiet
+(`hold_ms`) the mark is typed as it was. Set `hold_marks` to `false` to type
+every mark straight away. Pause lengths and where sentences really ended go to
+`cadence.jsonl` in the same folder, or to the file named in `cadence_log`.
+
 ## How it works
 
 - [Silero VAD](https://github.com/snakers4/silero-vad) detects speech, and a

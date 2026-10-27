@@ -21,7 +21,8 @@ from typing import Callable
 
 import numpy as np
 
-from .config import AUDIO_DIR, HISTORY_DIR, Settings
+from . import cadence
+from .config import AUDIO_DIR, DATA_DIR, HISTORY_DIR, Settings
 from .vad import FRAME, StreamingVad
 
 RATE = 16000
@@ -55,6 +56,11 @@ class Segmenter:
         self._silence_run = 0
         self._since_preview = 0
         self.utt_id = 0
+        self._n = 0  # frames seen
+        self._last_voice = -1  # frame of the last speech heard
+        self._gap_ms = -1  # silence before the utterance in progress (-1: the first)
+        # How the utterance just handed to on_utterance ended (pause, soft, hard, flush), read by its handler.
+        self.last_info: dict = {}
 
     @property
     def speaking(self) -> bool:
@@ -70,7 +76,7 @@ class Segmenter:
     def flush(self) -> None:
         """Finish whatever is in progress (used when you mute mid-sentence)."""
         if self._speaking:
-            self._emit(self._utt)
+            self._emit(self._utt, "flush")
         self._reset()
 
     def discard(self) -> None:
@@ -88,10 +94,14 @@ class Segmenter:
 
     def _frame(self, frame: np.ndarray) -> None:
         p = self.vad(frame)
+        self._n += 1
         if not self._speaking:
             self._preroll.append((frame, p))
             self._start_run = self._start_run + 1 if p >= START_PROB else 0
             if self._start_run >= 2:
+                first = self._n - self._start_run
+                self._gap_ms = int((first - self._last_voice) * FRAME_MS) if self._last_voice >= 0 else -1
+                self._last_voice = self._n
                 self._speaking = True
                 self._utt = list(self._preroll)
                 self._preroll.clear()
@@ -101,12 +111,14 @@ class Segmenter:
 
         self._utt.append((frame, p))
         self._silence_run = 0 if p >= KEEP_PROB else self._silence_run + 1
+        if p >= KEEP_PROB:
+            self._last_voice = self._n
         self._since_preview += 1
 
         if self._silence_run >= self.pause_frames:
             # Keep a little of the trailing silence; Whisper ends sentences better with it.
             keep = len(self._utt) - self._silence_run + frames(300)
-            self._emit(self._utt[:keep])
+            self._emit(self._utt[:keep], "pause", int(self._silence_run * FRAME_MS))
             tail = self._utt[keep:]
             self._utt = []
             self._speaking = False
@@ -115,7 +127,7 @@ class Segmenter:
             return
 
         if len(self._utt) >= self.soft_frames and self._silence_run >= frames(200):
-            self._emit(self._utt)
+            self._emit(self._utt, "soft")
             self._utt = []
             self._speaking = False
             self._start_run = 0
@@ -124,7 +136,8 @@ class Segmenter:
         if len(self._utt) >= self.hard_frames:
             cut = self._quietest_cut()
             head, self._utt = self._utt[:cut], self._utt[cut:]
-            self._emit(head)
+            self._emit(head, "hard")
+            self._gap_ms = 0
             self._since_preview = self.preview_frames
             return
 
@@ -140,11 +153,12 @@ class Segmenter:
         score = np.convolve(probs + energy / (energy.max() + 1e-9), np.ones(window) / window, mode="same")
         return lo + int(np.argmin(score[lo:len(self._utt) - window]))
 
-    def _emit(self, chunk: list[tuple[np.ndarray, float]]) -> None:
+    def _emit(self, chunk: list[tuple[np.ndarray, float]], end: str, pause_ms: int = 0) -> None:
         speech = [p for _, p in chunk if p >= KEEP_PROB]
         if len(speech) < frames(200):
             return
         self.utt_id += 1
+        self.last_info = {"end": end, "pause_ms": pause_ms, "gap_ms": self._gap_ms}
         self.on_utterance(self.utt_id, _join(chunk), float(np.mean(speech)))
 
 
@@ -181,8 +195,13 @@ class Transcriber:
                  on_preview: Callable[[int, str], None],
                  on_final: Callable[[int, str], None],
                  on_status: Callable[[str], None],
-                 on_command: Callable[[str], None] = lambda cmd: None):
+                 on_command: Callable[[str], None] = lambda cmd: None,
+                 on_mark: Callable[[int, str], None] = lambda utt_id, mark: None,
+                 speaking: Callable[[], bool] = lambda: False):
         self.settings = settings
+        self.on_mark = on_mark  # a held sentence mark to type right after that sentence ("" types nothing)
+        self.speaking = speaking
+        self._held: dict | None = None  # the last sentence, typed without its mark; transcriber thread only
         self.on_preview = on_preview
         self.on_final = on_final
         self.on_status = on_status
@@ -200,10 +219,12 @@ class Transcriber:
     def start(self) -> None:
         self._thread.start()
 
-    def submit_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False) -> None:
-        """muted=True only listens for "unmute": nothing is typed, shown or saved."""
+    def submit_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False,
+                     info: dict | None = None) -> None:
+        """muted=True only listens for "unmute": nothing is typed, shown or saved. [info] is how the utterance
+        ended (Segmenter.last_info), for the cadence log."""
         with self._cv:
-            self._finals.append((utt_id, audio, vad_prob, muted))
+            self._finals.append((utt_id, audio, vad_prob, muted, info or {}))
             self._submitted.append(time.monotonic())
             self._cv.notify()
 
@@ -275,13 +296,18 @@ class Transcriber:
 
         while True:
             with self._cv:
-                while not self._finals and self._preview is None:
-                    self._cv.wait()
-                if self._finals:
+                while not self._finals and self._preview is None and not self._held_due():
+                    self._cv.wait(0.25 if self._held else None)
+                if not self._finals and self._preview is None:
+                    job = None
+                elif self._finals:
                     job, kind = self._finals.popleft(), "final"
                 else:
                     job, kind = self._preview, "preview"
                     self._preview = None
+            if job is None:
+                self._release_held()  # nothing followed in time: the mark goes in as it was
+                continue
             try:
                 if kind == "final":
                     try:
@@ -295,6 +321,7 @@ class Transcriber:
                 log.exception("%s transcription failed", kind)
                 if kind == "final":
                     self._done_id = max(self._done_id, job[0])
+                    self._release_held()
                     if not job[3]:  # never keep audio heard while muted
                         _save_failed(job[1])
                         self.on_status("A sentence failed; its audio is saved in history")
@@ -312,11 +339,14 @@ class Transcriber:
         if utt_id > self._done_id:
             self.on_preview(utt_id, text)
 
-    def _do_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False) -> None:
+    def _do_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False,
+                  info: dict | None = None) -> None:
+        info = info or {}
         now = time.time()
         if now - self._last_final > 120:
             self._context = ""
         if muted:
+            self._release_held()
             # No prompt: past sentences shouldn't nudge a one-word clip toward other words.
             segments, _ = self.final_model.transcribe(audio, language=self.settings.language, beam_size=5,
                                                       condition_on_previous_text=False, without_timestamps=True)
@@ -347,15 +377,78 @@ class Transcriber:
         log.info("final #%d %.1fs audio in %.2fs vad=%.2f%s: %s", utt_id, len(audio) / RATE, took, vad_prob,
                  f" [{reason}]" if reason else "", text)
         self._done_id = max(self._done_id, utt_id)
+        self._log({"event": "final", "pause_ms": info.get("pause_ms", 0), "end": info.get("end", ""),
+                   "gap_ms": info.get("gap_ms", -1), "ended_with": text[-1] if text and text[-1] in ".?!," else "",
+                   "words": len(text.split()), "seconds": round(len(audio) / RATE, 1), "reason": reason})
         if reason:
+            self._release_held()
             self.on_final(utt_id, "")
             if cmd:
                 self.on_command(cmd)
             return
+        context = self._context
         if not bare(text):
             self._context = (self._context + " " + text)[-300:]
         self._last_final = now
-        self.on_final(utt_id, text)
+        typed = self._settle(audio, text, info) if self._held else text
+        hold = cadence.hold_mark(typed) if self.settings.hold_marks else None
+        if hold:
+            typed = hold[0]
+            self._held = {"utt_id": utt_id, "mark": hold[1], "text": text, "tail": audio[-int(cadence.TAIL_S * RATE):],
+                          "end": info.get("end", ""), "context": context, "at": time.monotonic()}
+        self.on_final(utt_id, typed)
+
+    def _settle(self, audio: np.ndarray, text: str, info: dict) -> str:
+        """Hears the held sentence's end and this one together, types the mark the join gets, and returns this
+        sentence with its first letter to match."""
+        h, self._held = self._held, None
+        pause = info.get("gap_ms", 0) if h["end"] == "pause" else 0  # a split has no pause
+        verdict = None
+        t = time.time()
+        try:
+            both = np.concatenate([h["tail"], audio[:int(cadence.NEXT_S * RATE)]])
+            vocab = ", ".join(self.settings.vocabulary)[:300]
+            prompt = ((vocab + ". ") if vocab else "") + h["context"][-150:]
+            # The preview model answers in a fifth of the time (0.45 s against 2.5 s with the GPU shared), so it
+            # settles sentence ends, the common case. Only the final model may take a full stop away: the preview
+            # model once heard "...together slowly. If that works" as one sentence.
+            verdict = self._join_mark(self.preview_model, both, len(h["tail"]) / RATE, h["text"], prompt)
+            if verdict not in (".", "?", "!") and self.final_model is not self.preview_model:
+                verdict = self._join_mark(self.final_model, both, len(h["tail"]) / RATE, h["text"], prompt)
+        except Exception:
+            log.exception("join failed; the held mark stays")
+        ms = int((time.time() - t) * 1000)
+        mark = cadence.mark_for(h["mark"], verdict)
+        log.info("join: pause %d ms -> %r (%d ms)", pause, mark, ms)
+        self._log({"event": "join", "pause_ms": pause, "end": h["end"], "boundary": mark in (".", "?", "!"),
+                   "punct": verdict if verdict is not None else h["mark"], "ms": ms,
+                   "before": " ".join(h["text"].split()[-3:]), "after": " ".join(text.split()[:3])})
+        self.on_mark(h["utt_id"], mark)
+        return cadence.start_case(text, mark in (".", "?", "!"), self.settings.vocabulary)
+
+    def _join_mark(self, model, audio: np.ndarray, split: float, prev: str, prompt: str) -> str:
+        # the token cap stops a rare repetition loop (one ran for minutes in testing)
+        segments, _ = model.transcribe(
+            audio, language=self.settings.language, beam_size=5, initial_prompt=prompt or None,
+            word_timestamps=True, condition_on_previous_text=False, vad_filter=False, max_new_tokens=120)
+        return cadence.join_mark([w for s in segments for w in (s.words or [])], split, prev)
+
+    def _held_due(self) -> bool:
+        h = self._held
+        if not h:
+            return False
+        waited = time.monotonic() - h["at"]
+        # someone still talking means the next sentence is on its way, but a mark is never held for long
+        return waited >= self.settings.hold_ms / 1000 and (not self.speaking() or waited >= 10)
+
+    def _release_held(self) -> None:
+        if self._held:
+            h, self._held = self._held, None
+            self.on_mark(h["utt_id"], h["mark"])
+
+    def _log(self, entry: dict) -> None:
+        path = Path(self.settings.cadence_log) if self.settings.cadence_log else DATA_DIR / "cadence.jsonl"
+        cadence.write(path, {"device": "voicewriter", **entry})
 
 
 def bare(text: str) -> bool:

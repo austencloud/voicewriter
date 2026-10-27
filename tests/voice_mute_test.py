@@ -76,6 +76,9 @@ ctl.mic = FakeMic()
 typed: list[str] = []
 states: list[tuple[float, bool]] = []
 ctl.typer.type = typed.append
+marks: list[str] = []
+ctl.typer.type_mark = marks.append  # never types into the real foreground window
+ctl.settings.cadence_log = str(_tmp / "cadence.jsonl")  # not the real log
 orig_toggle = ctl.toggle
 
 
@@ -112,6 +115,7 @@ poll.start(100)
 app.exec()
 
 print("typed:", typed)
+print("held marks typed:", marks)
 print("listening changes (seconds in, on?):", states)
 joined = " ".join(typed).lower()
 check(len(typed) == 2, "exactly two sentences typed")

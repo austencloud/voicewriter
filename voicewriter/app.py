@@ -83,6 +83,7 @@ def move_old_startup_entry() -> None:
 class Signals(QObject):
     preview = pyqtSignal(int, str)
     final = pyqtSignal(int, str)
+    mark = pyqtSignal(int, str)
     status = pyqtSignal(str)
     failed_typing = pyqtSignal(str, str)
     toggle = pyqtSignal()
@@ -107,6 +108,7 @@ class Controller:
         self.bar.menu_requested.connect(self.show_menu)
         self.sig.preview.connect(self._on_preview)
         self.sig.final.connect(self._on_final)
+        self.sig.mark.connect(self._on_mark)
         self.sig.status.connect(self._on_status)
         self.sig.failed_typing.connect(self._on_failed_typing)
         self.sig.toggle.connect(self.toggle)
@@ -126,7 +128,7 @@ class Controller:
         self.typer = Typer(lambda: int(self.bar.winId()), self.watch, self.sig.failed_typing.emit,
                            lambda text: self.settings.send_to_claude and self.claude.send(text, send_text))
         self.transcriber = Transcriber(self.settings, self.sig.preview.emit, self.sig.final.emit, self.sig.status.emit,
-                                       self.sig.command.emit)
+                                       self.sig.command.emit, self.sig.mark.emit, lambda: self.segmenter.speaking)
         self.segmenter = Segmenter(self.settings, StreamingVad(), self._on_utterance, self._on_partial)
         self._health = QTimer()
         self._health.timeout.connect(self._check_health)
@@ -188,7 +190,7 @@ class Controller:
 
     def _on_utterance(self, utt_id: int, audio, vad_prob: float) -> None:
         if self._utt_live:
-            self.transcriber.submit_final(utt_id, audio, vad_prob)
+            self.transcriber.submit_final(utt_id, audio, vad_prob, info=self.segmenter.last_info)
         elif len(audio) <= COMMAND_MAX_S * 16000:
             self.transcriber.submit_final(utt_id, audio, vad_prob, muted=True)
 
@@ -289,6 +291,11 @@ class Controller:
         if text:
             self.last_text = text
             self.typer.type(text)
+
+    def _on_mark(self, utt_id: int, mark: str) -> None:
+        if mark:
+            self.last_text += mark
+            self.typer.type_mark(mark)
 
     def _on_status(self, text: str) -> None:
         # A message ending in "…" is ongoing work (a model download) and stays until the next status.

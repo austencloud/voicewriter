@@ -71,6 +71,12 @@ class Settings:
     hotkey: str = "ctrl+shift+space"
     bar_height: int = 40
     keep_audio_days: int = 2
+    # A sentence's closing . ? or ! waits until you go on: if the next words carry the sentence on, the mark becomes
+    # a comma or nothing. Typed as it was after hold_ms of quiet.
+    hold_marks: bool = True
+    hold_ms: int = 2500
+    # Where pause lengths and sentence ends are logged, one JSON line each (empty: cadence.jsonl next to the history).
+    cadence_log: str = ""
 
     @classmethod
     def load(cls) -> "Settings":

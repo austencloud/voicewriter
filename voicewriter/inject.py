@@ -124,17 +124,24 @@ class Typer:
         self._watch = watch
         self._on_failed = on_failed
         self._elsewhere = elsewhere
-        self._q: "queue.SimpleQueue[str]" = queue.SimpleQueue()
+        self._q: "queue.SimpleQueue[tuple[str, bool]]" = queue.SimpleQueue()
         threading.Thread(target=self._run, name="typer", daemon=True).start()
 
     def type(self, text: str) -> None:
-        self._q.put(text)
+        self._q.put((text, False))
+
+    def type_mark(self, mark: str) -> None:
+        """Types a held sentence mark glued to the last sentence, only if the cursor is still right after it."""
+        self._q.put((mark, True))
 
     def _run(self) -> None:
         while True:
-            text = self._q.get()
+            text, mark = self._q.get()
             try:
-                self._type_one(text)
+                if mark:
+                    self._type_mark(text)
+                else:
+                    self._type_one(text)
             except Exception:
                 log.exception("typing failed")
                 self._on_failed(text, "error")
@@ -163,6 +170,16 @@ class Typer:
             self._watch.typed_dictation()
         else:
             self._on_failed(text.strip(), "error")
+
+    def _type_mark(self, mark: str) -> None:
+        deadline = time.monotonic() + 5
+        while _modifiers_down() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not self._watch.right_after_dictation():
+            log.info("held mark %r not typed: the cursor moved on", mark)
+            return
+        if send_text(mark):
+            self._watch.typed_dictation()
 
     def _send_elsewhere(self, text: str, reason: str) -> None:
         if not self._elsewhere(text):

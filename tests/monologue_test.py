@@ -40,6 +40,7 @@ def main(wav_path: str, script_path: str, speed: float = 1.0) -> int:
     script = open(script_path, encoding="utf-8-sig").read()
 
     settings = Settings()
+    settings.cadence_log = str(_tmp / "cadence.jsonl")  # not the real log
     finals: dict[int, str] = {}
     previews = 0
     done = threading.Event()
@@ -52,7 +53,12 @@ def main(wav_path: str, script_path: str, speed: float = 1.0) -> int:
         nonlocal previews
         previews += 1
 
-    tr = Transcriber(settings, on_preview, on_final, lambda s: s and print("status:", s))
+    def on_mark(i, mark):
+        finals[i] += mark  # a held mark goes right after its sentence, as the app types it
+        print(f"  mark #{i}: {mark!r}")
+
+    tr = Transcriber(settings, on_preview, on_final, lambda s: s and print("status:", s), on_mark=on_mark,
+                     speaking=lambda: seg.speaking)
     tr.start()
     tr.ready.wait()
     submitted = []
@@ -74,6 +80,7 @@ def main(wav_path: str, script_path: str, speed: float = 1.0) -> int:
     while len(finals) < last_id and time.time() < deadline:
         time.sleep(0.05)
     lag = time.time() - (t0 + len(audio) / 16000 / speed)
+    time.sleep(settings.hold_ms / 1000 + 0.5)  # the last sentence's held mark
 
     typed = " ".join(finals[k] for k in sorted(finals))
     ref, hyp = words(script), words(typed)

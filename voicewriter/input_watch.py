@@ -127,6 +127,7 @@ class InputWatch:
         self.hotkey_ok = False
         self.raw_ok = False
         self.need_space = False
+        self.dictation_last = False  # nothing typed or clicked since our last sentence
         self.hwnd = None
         self.stats = {"mouse": 0, "clicks": 0, "keys": 0}  # counts only, for tests and the log
         self._fg_at_last = None
@@ -138,10 +139,15 @@ class InputWatch:
 
     def typed_dictation(self) -> None:
         self.need_space = True
+        self.dictation_last = True
         self._fg_at_last = user32.GetForegroundWindow()
 
     def should_space(self) -> bool:
         return self.need_space and user32.GetForegroundWindow() == self._fg_at_last
+
+    def right_after_dictation(self) -> bool:
+        """The cursor still sits right after our last sentence: no key, click or window switch since."""
+        return self.dictation_last and user32.GetForegroundWindow() == self._fg_at_last
 
     # Events --------------------------------------------------------------
 
@@ -159,11 +165,13 @@ class InputWatch:
                 self.stats["clicks"] += 1
                 if not self._cursor_on_own_window():
                     self.need_space = False
+                    self.dictation_last = False
         elif raw.header.dwType == RIM_TYPEKEYBOARD:
             k = raw.data.keyboard
             if k.Message not in (WM_KEYDOWN, WM_SYSKEYDOWN):
                 return
             self.stats["keys"] += 1
+            self.dictation_last = False
             if k.VKey in (0x0D, 0x09, 0x20, 0x1B):  # Enter, Tab, Space, Esc
                 self.need_space = False
             elif _printable(k.VKey) and not (_held(0x11) or _held(0x12) or _held(0x5B) or _held(0x5C)):
