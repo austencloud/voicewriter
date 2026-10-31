@@ -141,7 +141,8 @@ marks = [e for e in got_a if e["event"] == "mark"]
 if speech().any():
     check(len(finals) >= 2, f"phone A got {len(finals)} sentences")
     check([e["utt"] for e in finals] == list(range(1, len(finals) + 1)), "utterance ids count up from 1")
-    check(all(e["held"] and not e["text"].endswith(".") for e in finals), "every final held its full stop")
+    check(all(e["held"] and e.get("mark") == "." and not e["text"].endswith(".") for e in finals),
+          "every final held its full stop, and said which mark it held")
     check([m["utt"] for m in marks] == [e["utt"] for e in finals], "every held mark was settled, in order")
     check(marks[-1]["mark"] == ".", "the last mark went in as it was when phone A stopped")
     check(all(m["mark"] == "" for m in marks[:-1]), "joins that heard no mark carried the sentence on")

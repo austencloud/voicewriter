@@ -13,9 +13,10 @@ The protocol is plain TCP, so a phone needs nothing beyond its standard library:
                once everything is sent) or {"cmd": "discard"} (drop it). A control line starts with "{", which no
                frame length can (it would mean a frame over 2 GB).
   PC → phone   JSON lines: {"event": "ready"}, {"event": "preview", "utt": n, "text": ...},
-               {"event": "final", "utt": n, "text": ..., "held": true|false} (held: the closing mark comes later),
+               {"event": "final", "utt": n, "text": ..., "held": true|false, "mark": "."} (held: the closing mark,
+               given in "mark", is left off and settled later),
                {"event": "mark", "utt": n, "mark": "."} (the held mark, settled: "." "?" "!" "," or ""),
-               {"event": "idle"} (15 s without speech), {"event": "done"} and {"event": "error", "message": ...}.
+               {"event": "idle"} (15 s without speech), {"event": "done"} (after stop) and {"event": "error", "message": ...}.
 """
 
 import hmac
@@ -126,9 +127,11 @@ class Connection:
         lane = None
         started = time.monotonic()
         try:
-            hello = _hello(reader.readline(4096))
+            line = reader.readline(4096)
+            hello = _hello(line)
             if hello is None:
-                log.info("remote microphone: %s sent no hello, closing", self.addr)
+                if line.strip():  # a phone probing which address answers connects and closes: not worth a line
+                    log.info("remote microphone: %s sent no hello, closing", self.addr)
                 return
             token = self.mic.settings.remote_token
             if not token or not hmac.compare_digest(str(hello.get("token", "")).encode(), token.encode()):
@@ -216,8 +219,11 @@ class Connection:
         self.send({"event": "preview", "utt": utt_id, "text": text})
 
     def _final(self, utt_id: int, text: str) -> None:
-        held = self.lane.held is not None and self.lane.held["utt_id"] == utt_id
-        self.send({"event": "final", "utt": utt_id, "text": text, "held": held})
+        held = self.lane.held if self.lane.held is not None and self.lane.held["utt_id"] == utt_id else None
+        event = {"event": "final", "utt": utt_id, "text": text, "held": held is not None}
+        if held:
+            event["mark"] = held["mark"]  # so a phone that stops early can put it in itself
+        self.send(event)
 
     def _mark(self, utt_id: int, mark: str) -> None:
         self.send({"event": "mark", "utt": utt_id, "mark": mark})

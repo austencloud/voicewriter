@@ -74,7 +74,9 @@ code-signed. Choose "More info", then "Run anyway".
 
 Everything happens on your PC. Audio never leaves it, and VoiceWriter makes no
 network connections except to download the speech models the first time
-(from Hugging Face). There's no account, telemetry or analytics.
+(from Hugging Face). There's no account, telemetry or analytics. The one
+exception is the remote microphone below, which is off until you set a token
+for it.
 
 Your history, saved audio, word list and settings are kept in
 `%LOCALAPPDATA%\VoiceWriter`. Delete that folder to erase them.
@@ -92,6 +94,27 @@ the middle of a sentence doesn't split it in two. After 2.5 seconds of quiet
 (`hold_ms`) the mark is typed as it was. Set `hold_marks` to `false` to type
 every mark straight away. Pause lengths and where sentences really ended go to
 `cadence.jsonl` in the same folder, or to the file named in `cadence_log`.
+
+## Remote microphone
+
+A phone (or any other device) can use VoiceWriter as its speech engine. It
+streams its microphone to the PC, and VoiceWriter sends the words back to that
+device only: nothing it says is typed on the PC or written to the PC's
+history. Its sentences are cut, transcribed and punctuated exactly like the
+PC microphone's, with the same models and held marks.
+
+It is off by default. To turn it on, set `remote_token` in `settings.json` to
+a long random string, restart VoiceWriter, and allow TCP port 8011
+(`remote_port`) through Windows Firewall. Anyone who can reach that port and
+knows the token can use your PC's speech models, so keep it to your home
+network or a private VPN. A device's sentences are kept in the `remote`
+folder.
+
+The protocol is plain TCP and is described at the top of
+`voicewriter/remote.py`. `tools/fake_phone.py` plays a recording into it the
+way a phone would. `python -m voicewriter --remote-only --data-dir <folder>`
+runs the remote microphone on its own, without the PC microphone, the bar or
+typing.
 
 ## How it works
 
