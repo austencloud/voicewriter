@@ -66,6 +66,11 @@ class Segmenter:
     def speaking(self) -> bool:
         return self._speaking
 
+    @property
+    def quiet_ms(self) -> int:
+        """How long since speech was last heard (or since the start, before any)."""
+        return int((self._n - max(self._last_voice, 0)) * FRAME_MS)
+
     def feed(self, samples: np.ndarray) -> None:
         buf = np.concatenate([self._pending, samples]) if len(self._pending) else samples
         n = len(buf) // FRAME
@@ -190,6 +195,34 @@ def command_of(text: str) -> str | None:
     return _COMMANDS.get(" ".join(words.split()))
 
 
+class Lane:
+    """One source of speech and where its words go. The PC microphone is one lane; each phone using the remote
+    microphone is another. A lane keeps its own sentence context and held mark; all lanes share the models."""
+
+    def __init__(self, on_preview: Callable[[int, str], None], on_final: Callable[[int, str], None],
+                 on_mark: Callable[[int, str], None] = lambda utt_id, mark: None,
+                 on_command: Callable[[str], None] = lambda cmd: None,
+                 speaking: Callable[[], bool] = lambda: False,
+                 device: str = "voicewriter", commands: bool = True,
+                 record: Callable[[str, np.ndarray, str | None], None] | None = None,
+                 on_drained: Callable[[], None] = lambda: None):
+        self.on_preview = on_preview
+        self.on_final = on_final
+        self.on_mark = on_mark  # a held sentence mark to type right after that sentence ("" types nothing)
+        self.on_command = on_command
+        self.speaking = speaking
+        self.device = device  # names the lane in the log and the cadence log
+        self.commands = commands  # whether "mute" and "unmute" said alone are obeyed
+        self.record = record or _record
+        self.on_drained = on_drained  # everything submitted before Transcriber.drain() is done
+        self.held: dict | None = None  # the last sentence, typed without its mark; transcriber thread only
+        self.preview: tuple[int, np.ndarray, float] | None = None
+        self.done_id = 0
+        self.context = ""
+        self.last_final = 0.0
+        self.closed = False
+
+
 class Transcriber:
     def __init__(self, settings: Settings,
                  on_preview: Callable[[int, str], None],
@@ -199,38 +232,48 @@ class Transcriber:
                  on_mark: Callable[[int, str], None] = lambda utt_id, mark: None,
                  speaking: Callable[[], bool] = lambda: False):
         self.settings = settings
-        self.on_mark = on_mark  # a held sentence mark to type right after that sentence ("" types nothing)
-        self.speaking = speaking
-        self._held: dict | None = None  # the last sentence, typed without its mark; transcriber thread only
-        self.on_preview = on_preview
-        self.on_final = on_final
         self.on_status = on_status
-        self.on_command = on_command
-        self._finals: collections.deque = collections.deque()
-        self._preview: tuple[int, np.ndarray] | None = None
-        self._done_id = 0
+        self.main = Lane(on_preview, on_final, on_mark, on_command, speaking)
+        self._lanes = [self.main]
+        self._finals: collections.deque = collections.deque()  # (kind, lane, job); kind is "final" or "drain"
         self._submitted: collections.deque = collections.deque()  # one entry per final not yet finished
         self._cv = threading.Condition()
-        self._context = ""
-        self._last_final = 0.0
         self.ready = threading.Event()
         self._thread = threading.Thread(target=self._run, name="transcriber", daemon=True)
 
     def start(self) -> None:
         self._thread.start()
 
+    def add_lane(self, lane: Lane) -> None:
+        with self._cv:
+            self._lanes.append(lane)
+
+    def remove_lane(self, lane: Lane) -> None:
+        """What the lane still had queued is dropped, and nothing more reaches its callbacks."""
+        with self._cv:
+            lane.closed = True
+            lane.preview = None
+            if lane in self._lanes:
+                self._lanes.remove(lane)
+
+    def drain(self, lane: Lane) -> None:
+        """Once the lane's finals so far are done, types its held mark as it was and calls lane.on_drained."""
+        with self._cv:
+            self._finals.append(("drain", lane, None))
+            self._cv.notify()
+
     def submit_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False,
-                     info: dict | None = None) -> None:
+                     info: dict | None = None, lane: Lane | None = None) -> None:
         """muted=True only listens for "unmute": nothing is typed, shown or saved. [info] is how the utterance
         ended (Segmenter.last_info), for the cadence log."""
         with self._cv:
-            self._finals.append((utt_id, audio, vad_prob, muted, info or {}))
+            self._finals.append(("final", lane or self.main, (utt_id, audio, vad_prob, muted, info or {})))
             self._submitted.append(time.monotonic())
             self._cv.notify()
 
-    def submit_preview(self, utt_id: int, audio: np.ndarray) -> None:
+    def submit_preview(self, utt_id: int, audio: np.ndarray, lane: Lane | None = None) -> None:
         with self._cv:
-            self._preview = (utt_id, audio[-RATE * 28:])
+            (lane or self.main).preview = (utt_id, audio[-RATE * 28:], time.monotonic())
             self._cv.notify()
 
     def waiting(self) -> tuple[int, float]:
@@ -277,11 +320,11 @@ class Transcriber:
         self.on_status(f"{why}, so using the CPU: slower and less accurate")
         return final, final
 
-    def _prompt(self) -> str:
+    def _prompt(self, lane: Lane) -> str:
         # The word list comes first and is never pushed out by recent sentences.
         vocab = ", ".join(self.settings.vocabulary)[:300]
         vocab = vocab + ". " if vocab else ""
-        return vocab + self._context[-(450 - len(vocab)):]
+        return vocab + lane.context[-(450 - len(vocab)):]
 
     def _run(self) -> None:
         t = time.time()
@@ -295,113 +338,133 @@ class Transcriber:
         self.on_status("")
 
         while True:
+            due: list[Lane] = []
             with self._cv:
-                while not self._finals and self._preview is None and not self._held_due():
-                    self._cv.wait(0.25 if self._held else None)
-                if not self._finals and self._preview is None:
-                    job = None
-                elif self._finals:
-                    job, kind = self._finals.popleft(), "final"
+                while not self._finals and not self._preview_lane() and not self._due_lanes():
+                    self._cv.wait(0.25 if any(lane.held for lane in self._lanes) else None)
+                if self._finals:
+                    kind, lane, job = self._finals.popleft()
+                elif lane := self._preview_lane():
+                    kind, job = "preview", lane.preview
+                    lane.preview = None
                 else:
-                    job, kind = self._preview, "preview"
-                    self._preview = None
-            if job is None:
-                self._release_held()  # nothing followed in time: the mark goes in as it was
+                    kind, lane, job = None, None, None
+                    due = self._due_lanes()
+            if kind is None:
+                for held in due:
+                    self._release_held(held)  # nothing followed in time: the mark goes in as it was
+                continue
+            if kind == "drain":
+                if not lane.closed:
+                    self._release_held(lane)
+                    lane.on_drained()
                 continue
             try:
-                if kind == "final":
-                    try:
-                        self._do_final(*job)
-                    finally:
-                        with self._cv:
-                            self._submitted.popleft()
-                elif job[0] > self._done_id:
-                    self._do_preview(*job)
+                if lane.closed:
+                    pass
+                elif kind == "final":
+                    self._do_final(lane, *job)
+                elif job[0] > lane.done_id:
+                    self._do_preview(lane, *job[:2])
             except Exception:
                 log.exception("%s transcription failed", kind)
                 if kind == "final":
-                    self._done_id = max(self._done_id, job[0])
-                    self._release_held()
+                    lane.done_id = max(lane.done_id, job[0])
+                    self._release_held(lane)
                     if not job[3]:  # never keep audio heard while muted
-                        _save_failed(job[1])
-                        self.on_status("A sentence failed; its audio is saved in history")
+                        lane.record("[transcription failed]", job[1], "error")
+                        if lane is self.main:
+                            self.on_status("A sentence failed; its audio is saved in history")
+            finally:
+                if kind == "final":
+                    with self._cv:
+                        self._submitted.popleft()
 
-    def _transcribe(self, model, audio: np.ndarray, beam: int) -> tuple[str, list]:
+    def _preview_lane(self) -> Lane | None:
+        """The lane whose preview has waited longest. Caller holds the lock."""
+        waiting = [lane for lane in self._lanes if lane.preview is not None]
+        return min(waiting, key=lambda lane: lane.preview[2]) if waiting else None
+
+    def _due_lanes(self) -> list[Lane]:
+        return [lane for lane in self._lanes if self._held_due(lane)]
+
+    def _transcribe(self, model, audio: np.ndarray, beam: int, lane: Lane) -> tuple[str, list]:
         segments, _ = model.transcribe(
-            audio, language=self.settings.language, beam_size=beam, initial_prompt=self._prompt() or None,
+            audio, language=self.settings.language, beam_size=beam, initial_prompt=self._prompt(lane) or None,
             condition_on_previous_text=False, without_timestamps=True, vad_filter=False,
         )
         segments = list(segments)
         return clean(" ".join(s.text for s in segments)), segments
 
-    def _do_preview(self, utt_id: int, audio: np.ndarray) -> None:
-        text, _ = self._transcribe(self.preview_model, audio, beam=1)
-        if utt_id > self._done_id:
-            self.on_preview(utt_id, text)
+    def _do_preview(self, lane: Lane, utt_id: int, audio: np.ndarray) -> None:
+        text, _ = self._transcribe(self.preview_model, audio, 1, lane)
+        if utt_id > lane.done_id:
+            lane.on_preview(utt_id, text)
 
-    def _do_final(self, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False,
+    def _do_final(self, lane: Lane, utt_id: int, audio: np.ndarray, vad_prob: float, muted: bool = False,
                   info: dict | None = None) -> None:
         info = info or {}
+        tag = "" if lane is self.main else f"[{lane.device}] "
         now = time.time()
-        if now - self._last_final > 120:
-            self._context = ""
+        if now - lane.last_final > 120:
+            lane.context = ""
         if muted:
-            self._release_held()
+            self._release_held(lane)
             # No prompt: past sentences shouldn't nudge a one-word clip toward other words.
             segments, _ = self.final_model.transcribe(audio, language=self.settings.language, beam_size=5,
                                                       condition_on_previous_text=False, without_timestamps=True)
             heard = command_of(" ".join(s.text for s in segments))
-            self._done_id = max(self._done_id, utt_id)
+            lane.done_id = max(lane.done_id, utt_id)
             if heard == "unmute":
                 log.info("final #%d while muted: unmute", utt_id)
-                self.on_command("unmute")
+                lane.on_command("unmute")
             return
         t = time.time()
-        text, segments = self._transcribe(self.final_model, audio, beam=5)
-        if bare(text) and self._context:
+        text, segments = self._transcribe(self.final_model, audio, 5, lane)
+        if bare(text) and lane.context:
             # Whisper copies the style of its prompt. One sentence that came back with no punctuation would
             # make every sentence after it bare too, so try this one again with only the word list as prompt.
-            log.info("final #%d came back unpunctuated; retrying without context", utt_id)
-            self._context = ""
-            text, segments = self._transcribe(self.final_model, audio, beam=5)
+            log.info("%sfinal #%d came back unpunctuated; retrying without context", tag, utt_id)
+            lane.context = ""
+            text, segments = self._transcribe(self.final_model, audio, 5, lane)
         took = time.time() - t
         reason = None
-        cmd = command_of(text)
+        cmd = command_of(text) if lane.commands else None
         if not text:
             reason = "empty"
         elif cmd:
             reason = f"command: {cmd}"
         elif text.lower().strip(" !.,") in {p.strip(" !.,") for p in _PHANTOMS} and vad_prob < 0.75:
             reason = "phantom"
-        _record(text, audio, reason)
-        log.info("final #%d %.1fs audio in %.2fs vad=%.2f%s: %s", utt_id, len(audio) / RATE, took, vad_prob,
+        lane.record(text, audio, reason)
+        log.info("%sfinal #%d %.1fs audio in %.2fs vad=%.2f%s: %s", tag, utt_id, len(audio) / RATE, took, vad_prob,
                  f" [{reason}]" if reason else "", text)
-        self._done_id = max(self._done_id, utt_id)
-        self._log({"event": "final", "pause_ms": info.get("pause_ms", 0), "end": info.get("end", ""),
-                   "gap_ms": info.get("gap_ms", -1), "ended_with": text[-1] if text and text[-1] in ".?!," else "",
-                   "words": len(text.split()), "seconds": round(len(audio) / RATE, 1), "reason": reason})
+        lane.done_id = max(lane.done_id, utt_id)
+        self._log(lane, {"event": "final", "pause_ms": info.get("pause_ms", 0), "end": info.get("end", ""),
+                         "gap_ms": info.get("gap_ms", -1), "ended_with": text[-1] if text and text[-1] in ".?!," else "",
+                         "words": len(text.split()), "seconds": round(len(audio) / RATE, 1), "reason": reason})
         if reason:
-            self._release_held()
-            self.on_final(utt_id, "")
+            self._release_held(lane)
+            lane.on_final(utt_id, "")
             if cmd:
-                self.on_command(cmd)
+                lane.on_command(cmd)
             return
-        context = self._context
+        context = lane.context
         if not bare(text):
-            self._context = (self._context + " " + text)[-300:]
-        self._last_final = now
-        typed = self._settle(audio, text, info) if self._held else text
+            lane.context = (lane.context + " " + text)[-300:]
+        lane.last_final = now
+        typed = self._settle(lane, audio, text, info) if lane.held else text
         hold = cadence.hold_mark(typed) if self.settings.hold_marks else None
         if hold:
             typed = hold[0]
-            self._held = {"utt_id": utt_id, "mark": hold[1], "text": text, "tail": audio[-int(cadence.TAIL_S * RATE):],
-                          "end": info.get("end", ""), "context": context, "at": time.monotonic()}
-        self.on_final(utt_id, typed)
+            lane.held = {"utt_id": utt_id, "mark": hold[1], "text": text, "tail": audio[-int(cadence.TAIL_S * RATE):],
+                         "end": info.get("end", ""), "context": context, "at": time.monotonic()}
+        lane.on_final(utt_id, typed)
 
-    def _settle(self, audio: np.ndarray, text: str, info: dict) -> str:
+    def _settle(self, lane: Lane, audio: np.ndarray, text: str, info: dict) -> str:
         """Hears the held sentence's end and this one together, types the mark the join gets, and returns this
         sentence with its first letter to match."""
-        h, self._held = self._held, None
+        h, lane.held = lane.held, None
         pause = info.get("gap_ms", 0) if h["end"] == "pause" else 0  # a split has no pause
         verdict = None
         t = time.time()
@@ -419,11 +482,11 @@ class Transcriber:
             log.exception("join failed; the held mark stays")
         ms = int((time.time() - t) * 1000)
         mark = cadence.mark_for(h["mark"], verdict)
-        log.info("join: pause %d ms -> %r (%d ms)", pause, mark, ms)
-        self._log({"event": "join", "pause_ms": pause, "end": h["end"], "boundary": mark in (".", "?", "!"),
-                   "punct": verdict if verdict is not None else h["mark"], "ms": ms,
-                   "before": " ".join(h["text"].split()[-3:]), "after": " ".join(text.split()[:3])})
-        self.on_mark(h["utt_id"], mark)
+        log.info("%sjoin: pause %d ms -> %r (%d ms)", "" if lane is self.main else f"[{lane.device}] ", pause, mark, ms)
+        self._log(lane, {"event": "join", "pause_ms": pause, "end": h["end"], "boundary": mark in (".", "?", "!"),
+                         "punct": verdict if verdict is not None else h["mark"], "ms": ms,
+                         "before": " ".join(h["text"].split()[-3:]), "after": " ".join(text.split()[:3])})
+        lane.on_mark(h["utt_id"], mark)
         return cadence.start_case(text, mark in (".", "?", "!"), self.settings.vocabulary)
 
     def _join_mark(self, model, audio: np.ndarray, split: float, prev: str, prompt: str) -> str:
@@ -433,22 +496,22 @@ class Transcriber:
             word_timestamps=True, condition_on_previous_text=False, vad_filter=False, max_new_tokens=120)
         return cadence.join_mark([w for s in segments for w in (s.words or [])], split, prev)
 
-    def _held_due(self) -> bool:
-        h = self._held
+    def _held_due(self, lane: Lane) -> bool:
+        h = lane.held
         if not h:
             return False
         waited = time.monotonic() - h["at"]
         # someone still talking means the next sentence is on its way, but a mark is never held for long
-        return waited >= self.settings.hold_ms / 1000 and (not self.speaking() or waited >= 10)
+        return waited >= self.settings.hold_ms / 1000 and (not lane.speaking() or waited >= 10)
 
-    def _release_held(self) -> None:
-        if self._held:
-            h, self._held = self._held, None
-            self.on_mark(h["utt_id"], h["mark"])
+    def _release_held(self, lane: Lane) -> None:
+        if lane.held:
+            h, lane.held = lane.held, None
+            lane.on_mark(h["utt_id"], h["mark"])
 
-    def _log(self, entry: dict) -> None:
+    def _log(self, lane: Lane, entry: dict) -> None:
         path = Path(self.settings.cadence_log) if self.settings.cadence_log else DATA_DIR / "cadence.jsonl"
-        cadence.write(path, {"device": "voicewriter", **entry})
+        cadence.write(path, {"device": lane.device, **entry})
 
 
 def bare(text: str) -> bool:
@@ -468,10 +531,6 @@ def _record(text: str, audio: np.ndarray, reason: str | None) -> None:
         _write_wav(day / f"{now:%H%M%S_%f}.wav", audio)
     except OSError:
         log.exception("could not write history")
-
-
-def _save_failed(audio: np.ndarray) -> None:
-    _record("[transcription failed]", audio, "error")
 
 
 def _write_wav(path: Path, audio: np.ndarray) -> None:

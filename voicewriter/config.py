@@ -6,14 +6,15 @@ import shutil
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "VoiceWriter"
+# VOICEWRITER_DATA (set by --data-dir) keeps a second copy, such as a test of the remote microphone, apart.
+DATA_DIR = Path(os.environ.get("VOICEWRITER_DATA") or Path(os.environ.get("LOCALAPPDATA", Path.home())) / "VoiceWriter")
 SETTINGS_PATH = DATA_DIR / "settings.json"
 
 
 def _move_old_data() -> None:
     """VoiceWriter used to be called Dictate; bring its settings, word list and history along."""
     old = DATA_DIR.parent / "Dictate"
-    if not old.is_dir() or DATA_DIR.exists():
+    if os.environ.get("VOICEWRITER_DATA") or not old.is_dir() or DATA_DIR.exists():
         return
     try:
         try:
@@ -77,6 +78,10 @@ class Settings:
     hold_ms: int = 2500
     # Where pause lengths and sentence ends are logged, one JSON line each (empty: cadence.jsonl next to the history).
     cadence_log: str = ""
+    # The remote microphone: a phone streams its microphone here and gets the words back, made exactly as the PC
+    # microphone's are (remote.py). Listens on every network on this port, only while remote_token is set; 0 is off.
+    remote_port: int = 8011
+    remote_token: str = ""
 
     @classmethod
     def load(cls) -> "Settings":
@@ -93,6 +98,11 @@ class Settings:
 
     def save(self) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))  # keeps settings a newer version added
+        except (OSError, ValueError):
+            raw = {}
+        raw = {**(raw if isinstance(raw, dict) else {}), **asdict(self)}
         tmp = SETTINGS_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(raw, indent=2), encoding="utf-8")
         tmp.replace(SETTINGS_PATH)
