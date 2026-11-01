@@ -31,12 +31,19 @@ SLACK_S = 0.15
 
 
 def hold_mark(text: str) -> tuple[str, str] | None:
-    """The text without its closing mark, and the mark; None when there is nothing to hold ("..." and "?!" stay)."""
+    """The text without its closing mark, and the mark; None when there is nothing to hold ("?!" stays).
+
+    A trailing "..." is held too: Whisper writes it at most pauses, and it should stay only when you trail off.
+    """
     t = text.rstrip()
-    if len(t) < 2 or t[-1] not in ".?!" or t[-2] in ".?!":
+    trail = re.search(r"(\.{2,}|…)$", t)
+    if trail:
+        body, mark = t[:trail.start()].rstrip(), trail.group(1)
+    elif len(t) < 2 or t[-1] not in ".?!" or t[-2] in ".?!":
         return None
-    body = t[:-1].rstrip()
-    return (body, t[-1]) if any(c.isalnum() for c in body) else None
+    else:
+        body, mark = t[:-1].rstrip(), t[-1]
+    return (body, mark) if any(c.isalnum() for c in body) else None
 
 
 def _bare(word: str) -> str:
@@ -68,13 +75,14 @@ def join_mark(words: list, split: float, prev: str) -> str:
 
 
 def mark_for(held: str, verdict: str | None) -> str:
-    """What the held mark becomes: the verdict's sentence end (keeping ? and !), a comma, or nothing."""
+    """What the held mark becomes: the verdict's sentence end (keeping ? and !), a comma, or nothing. A held "..."
+    is kept only when nothing could be heard after it; a new sentence after it gets a full stop."""
     if verdict is None:
         return held
     if verdict in ("?", "!"):
         return verdict
     if verdict == ".":
-        return held
+        return held if held in ("?", "!") else "."
     return verdict  # "," or ""
 
 

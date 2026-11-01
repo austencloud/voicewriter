@@ -23,12 +23,13 @@ def check(ok: bool, what: str) -> None:
 
 
 for text, want in [("I went to the park.", ("I went to the park", ".")), ("Are you free? ", ("Are you free", "?")),
-                   ("Wow!", ("Wow", "!")), ("and then...", None), ("Really?!", None), ("no mark here", None),
-                   (".", None), (" - .", None)]:
+                   ("Wow!", ("Wow", "!")), ("and then...", ("and then", "...")), ("so…", ("so", "…")),
+                   ("Really?!", None), ("no mark here", None), (".", None), (" - .", None), ("...", None)]:
     check(cadence.hold_mark(text) == want, f"hold_mark({text!r}) -> {want}")
 
 for held, verdict, want in [(".", None, "."), ("?", None, "?"), (".", ".", "."), ("?", ".", "?"), (".", "?", "?"),
-                            (".", "!", "!"), (".", ",", ","), (".", "", ""), ("?", "", "")]:
+                            (".", "!", "!"), (".", ",", ","), (".", "", ""), ("?", "", ""),
+                            ("...", None, "..."), ("...", "", ""), ("...", ",", ","), ("...", ".", "."), ("...", "?", "?")]:
     check(cadence.mark_for(held, verdict) == want, f"mark_for({held!r}, {verdict!r}) -> {want!r}")
 
 vocab = ["Kasey Foster", "poi", "Levi-wand", "Lincoln Park"]
