@@ -188,6 +188,7 @@ def clean(text: str) -> str:
 # "I need to mute the TV" is just words and gets typed.
 _COMMANDS = {"mute": "mute", "unmute": "unmute", "un mute": "unmute"}
 COMMAND_MAX_S = 3.0  # utterances longer than this are never checked while muted
+TRAIL_HOLD_S = 8.0  # how long a held "..." waits for the next words before it is typed as it was
 
 
 def command_of(text: str) -> str | None:
@@ -501,8 +502,11 @@ class Transcriber:
         if not h:
             return False
         waited = time.monotonic() - h["at"]
+        # A "..." waits longer: Whisper writes it when you stop to think as much as when you trail off, and a
+        # 4 s pause mid-sentence typed it (2026-10-31).
+        hold = self.settings.hold_ms / 1000 if h["mark"] in ".?!" else max(self.settings.hold_ms / 1000, TRAIL_HOLD_S)
         # someone still talking means the next sentence is on its way, but a mark is never held for long
-        return waited >= self.settings.hold_ms / 1000 and (not lane.speaking() or waited >= 10)
+        return waited >= hold and (not lane.speaking() or waited >= 10)
 
     def _release_held(self, lane: Lane) -> None:
         if lane.held:
