@@ -399,6 +399,7 @@ class Transcriber:
 
     def _do_preview(self, lane: Lane, utt_id: int, audio: np.ndarray) -> None:
         text, _ = self._transcribe(self.preview_model, audio, 1, lane)
+        text = cadence.drop_inline_ellipses(text)
         if utt_id > lane.done_id:
             lane.on_preview(utt_id, text)
 
@@ -428,6 +429,7 @@ class Transcriber:
             log.info("%sfinal #%d came back unpunctuated; retrying without context", tag, utt_id)
             lane.context = ""
             text, segments = self._transcribe(self.final_model, audio, 5, lane)
+        text = cadence.drop_inline_ellipses(text)
         took = time.time() - t
         reason = None
         cmd = command_of(text) if lane.commands else None
@@ -546,11 +548,11 @@ def _write_wav(path: Path, audio: np.ndarray) -> None:
         w.writeframes(pcm.tobytes())
 
 
-def prune_audio(days: int) -> None:
+def prune_audio(days: int, root: Path = AUDIO_DIR) -> None:
     cutoff = time.time() - days * 86400
-    if not AUDIO_DIR.is_dir():
+    if not root.is_dir():
         return
-    for day in AUDIO_DIR.iterdir():
+    for day in root.iterdir():
         try:
             if day.is_dir() and day.stat().st_mtime < cutoff:
                 for f in day.iterdir():

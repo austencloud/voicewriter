@@ -109,8 +109,8 @@ It is off by default. To turn it on, set `remote_token` in `settings.json` to
 a long random string, restart VoiceWriter, and allow TCP port 8011
 (`remote_port`) through Windows Firewall. Anyone who can reach that port and
 knows the token can use your PC's speech models, so keep it to your home
-network or a private VPN. A device's sentences are kept in the `remote`
-folder.
+network or a private VPN. A device's sentences, and their audio for as many
+days as the PC's, are kept in the `remote` folder.
 
 The protocol is plain TCP and is described at the top of
 `voicewriter/remote.py`. `tools/fake_phone.py` plays a recording into it the

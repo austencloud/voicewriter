@@ -153,6 +153,9 @@ history = list((remote.REMOTE_HISTORY_DIR).glob("*.txt"))
 check(not speech().any() or (history and "[fold6]" in history[0].read_text(encoding="utf-8")),
       "phone A's sentences are in the remote history")
 check(not (engine.HISTORY_DIR.exists() and any(engine.HISTORY_DIR.iterdir())), "and not in the PC history")
+clips = list(remote.REMOTE_AUDIO_DIR.glob("*/*-fold6.wav"))
+check(not speech().any() or len(clips) == len(finals), f"each of phone A's sentences kept its audio: {len(clips)} clips")
+check(not (engine.AUDIO_DIR.exists() and any(engine.AUDIO_DIR.iterdir())), "and none of it is in the PC's audio")
 
 # 3. A phone that goes away mid-sentence --------------------------------------
 before = fake.finals

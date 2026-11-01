@@ -23,7 +23,7 @@ from .guard import close_rivals, running_rivals
 from .claude_target import ClaudeTarget
 from .inject import Typer, send_text
 from .input_watch import InputWatch
-from .remote import RemoteMic
+from .remote import REMOTE_AUDIO_DIR, RemoteMic
 from .ui import STATE_LIVE, STATE_LOADING, STATE_OFF, Bar, build_menu
 from .vad import StreamingVad
 
@@ -150,6 +150,7 @@ class Controller:
             # A phone's words go back to the phone only; nothing here types them.
             RemoteMic(self.settings, self.transcriber).start()
         prune_audio(self.settings.keep_audio_days)
+        prune_audio(self.settings.keep_audio_days, REMOTE_AUDIO_DIR)
 
     def _wait_ready(self) -> None:
         self.transcriber.ready.wait()

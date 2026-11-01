@@ -3,7 +3,7 @@
 Each connection gets its own voice detector and Segmenter, so its speech is cut into sentences exactly like the
 PC microphone's, and its sentences go through the same Transcriber (same models, prompt and held marks) on a lane
 of their own. Nothing a phone says is typed on the PC, sent to Claude or written to the PC's history; it has a
-history of its own in the "remote" folder.
+history of its own in the "remote" folder, with each sentence's audio in "remote/audio".
 
 The protocol is plain TCP, so a phone needs nothing beyond its standard library:
 
@@ -34,11 +34,12 @@ from datetime import datetime
 import numpy as np
 
 from .config import DATA_DIR, LOG_PATH, Settings
-from .engine import RATE, Lane, Segmenter, Transcriber
+from .engine import RATE, Lane, Segmenter, Transcriber, _write_wav
 from .vad import StreamingVad
 
 log = logging.getLogger("voicewriter.remote")
 REMOTE_HISTORY_DIR = DATA_DIR / "remote"
+REMOTE_AUDIO_DIR = REMOTE_HISTORY_DIR / "audio"  # each sentence's audio, kept keep_audio_days like the PC's
 IDLE_MS = 15000
 MAX_FRAME = 1 << 20
 MAX_CONNECTIONS = 4
@@ -235,6 +236,9 @@ class Connection:
             line = f"{now:%H:%M:%S}  [{self.device}] {text}" + (f"   [not sent: {reason}]" if reason else "")
             with open(REMOTE_HISTORY_DIR / f"{now:%Y-%m-%d}.txt", "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+            day = REMOTE_AUDIO_DIR / f"{now:%Y-%m-%d}"
+            day.mkdir(parents=True, exist_ok=True)
+            _write_wav(day / f"{now:%H%M%S_%f}-{self.device}.wav", audio)
         except OSError:
             log.exception("could not write the remote history")
 

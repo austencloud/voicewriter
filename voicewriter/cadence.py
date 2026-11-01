@@ -46,6 +46,13 @@ def hold_mark(text: str) -> tuple[str, str] | None:
     return (body, mark) if any(c.isalnum() for c in body) else None
 
 
+def drop_inline_ellipses(text: str) -> str:
+    """Takes out a "..." that the sentence carries on after ("if I get... confused"). Whisper writes one wherever
+    you hesitate in a short clip; over a whole recording it writes none there (2026-10-31). A "..." before a capital
+    stays, and so does one at the end, which hold_mark deals with."""
+    return re.sub(r"(?<=\w)\s*(?:\.{2,}|…)\s+(?=[a-z])", " ", text)
+
+
 def _bare(word: str) -> str:
     return re.sub(r"[^a-z0-9']", "", word.lower())
 

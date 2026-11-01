@@ -32,6 +32,12 @@ for held, verdict, want in [(".", None, "."), ("?", None, "?"), (".", ".", "."),
                             ("...", None, "..."), ("...", "", ""), ("...", ",", ","), ("...", ".", "."), ("...", "?", "?")]:
     check(cadence.mark_for(held, verdict) == want, f"mark_for({held!r}, {verdict!r}) -> {want!r}")
 
+for text, want in [("if I get... confused, then", "if I get confused, then"),
+                   ("compare the latest output... against... the actual", "compare the latest output against the actual"),
+                   ("see what … you're", "see what you're"), ("I tried... I give up", "I tried... I give up"),
+                   ("and then...", "and then..."), ("Wait... What?", "Wait... What?")]:
+    check(cadence.drop_inline_ellipses(text) == want, f"drop_inline_ellipses({text!r}) -> {want!r}")
+
 vocab = ["Kasey Foster", "poi", "Levi-wand", "Lincoln Park"]
 for text, start, want in [("then we left", True, "Then we left"), ("Then we left", False, "then we left"),
                           ("I think so", False, "I think so"), ("I'm in", False, "I'm in"),
