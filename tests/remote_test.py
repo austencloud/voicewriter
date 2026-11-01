@@ -124,6 +124,7 @@ check(events(ra, until=("ready",))[0] == {"event": "ready"}, "phone A ready")
 check(events(rb, until=("ready",))[0] == {"event": "ready"}, "phone B ready")
 check({lane.device for lane in tr._lanes} == {"voicewriter", "fold6", "tablet"},
       f"one lane each, device names cleaned: {[lane.device for lane in tr._lanes]}")
+check(mic.streaming == 2, f"both phones count as streaming, so the PC microphone pauses: {mic.streaming}")
 
 step = 1600  # 100 ms frames, sent as fast as the socket takes them: the segmenter works in audio time
 silence = np.zeros(len(talk) + engine.RATE * 16, np.int16)
@@ -173,6 +174,7 @@ rb.close()
 b.close()
 time.sleep(0.5)
 check([lane.device for lane in tr._lanes] == ["voicewriter"], "only the PC lane is left")
+check(mic.streaming == 0, f"no phone streaming, so the PC microphone is back on: {mic.streaming}")
 check(fake.finals == before, "a dropped phone's half sentence is never transcribed in full")
 
 # 4. Framing edge: a frame bigger than the limit ----------------------------------

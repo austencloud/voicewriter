@@ -103,7 +103,9 @@ A phone (or any other device) can use VoiceWriter as its speech engine. It
 streams its microphone to the PC, and VoiceWriter sends the words back to that
 device only: nothing it says is typed on the PC or written to the PC's
 history. Its sentences are cut, transcribed and punctuated exactly like the
-PC microphone's, with the same models and held marks.
+PC microphone's, with the same models and held marks. While a device is
+connected, the PC microphone pauses, so the same speech isn't transcribed
+twice or typed on the PC as well.
 
 It is off by default. To turn it on, set `remote_token` in `settings.json` to
 a long random string, restart VoiceWriter, and allow TCP port 8011

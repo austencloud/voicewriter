@@ -100,6 +100,8 @@ class Controller:
         self.listening = self.settings.listen_on_start
         self._flush_pending = False
         self._discard_pending = False
+        self.remote: RemoteMic | None = None
+        self._phone = False  # a phone is dictating, so the PC microphone is paused
         self._utt_live = self.listening  # whether the utterance in progress started while listening
         self.last_text = ""
 
@@ -148,7 +150,8 @@ class Controller:
         threading.Thread(target=self._guard, name="guard", daemon=True).start()
         if self.settings.remote_port and self.settings.remote_token:
             # A phone's words go back to the phone only; nothing here types them.
-            RemoteMic(self.settings, self.transcriber).start()
+            self.remote = RemoteMic(self.settings, self.transcriber)
+            self.remote.start()
         prune_audio(self.settings.keep_audio_days)
         prune_audio(self.settings.keep_audio_days, REMOTE_AUDIO_DIR)
 
@@ -186,9 +189,19 @@ class Controller:
                 # Unmuted mid-speech: drop what was said while muted, start fresh from here.
                 self._discard_pending = False
                 self.segmenter.discard()
-            self.bar.level = self.mic.level
-            self.bar.speaking = self.segmenter.speaking and self.listening
-            if chunk is not None:
+            phone = self.remote is not None and self.remote.streaming > 0
+            if phone != self._phone:
+                # Both microphones hear you, and the GPU would transcribe every sentence twice (and type the
+                # phone's words here too): the PC microphone pauses while a phone dictates.
+                self._phone = phone
+                log.info("PC microphone %s", "paused while a phone dictates" if phone else "back on")
+                if phone:
+                    self.segmenter.flush()
+                else:
+                    self.segmenter.discard()
+            self.bar.level = 0.0 if phone else self.mic.level
+            self.bar.speaking = self.segmenter.speaking and self.listening and not phone
+            if chunk is not None and not phone:
                 if not self.segmenter.speaking:
                     self._utt_live = self.listening
                 self.segmenter.feed(chunk)
@@ -270,7 +283,7 @@ class Controller:
         if behind:
             self.bar.badge = f"GPU busy · {count} waiting" if count > 1 else "GPU busy · catching up"
         else:
-            self.bar.badge = ""
+            self.bar.badge = "Phone dictating" if self._phone else ""
         if behind != self._behind:
             self._behind = behind
             log.info("GPU %s (%d waiting, oldest %.1fs)", "behind" if behind else "caught up", count, age)

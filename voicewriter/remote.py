@@ -54,6 +54,7 @@ class RemoteMic:
         self.transcriber = transcriber
         self.port = port or settings.remote_port
         self._count = 0
+        self.streaming = 0  # connections past the hello, sending audio
         self._lock = threading.Lock()
         self.bound = threading.Event()
 
@@ -150,6 +151,8 @@ class Connection:
                         on_drained=lambda: self.send({"event": "done"}))
             self.lane = lane
             tr.add_lane(lane)
+            with self.mic._lock:
+                self.mic.streaming += 1
             log.info("remote microphone: %s connected from %s", self.device, self.addr)
             self.send({"event": "ready"})
             self.sock.settimeout(READ_TIMEOUT_S)
@@ -158,6 +161,8 @@ class Connection:
             log.info("remote microphone: %s dropped (%s)", self.device, e.__class__.__name__)
         finally:
             if lane is not None:
+                with self.mic._lock:
+                    self.mic.streaming -= 1
                 self.mic.transcriber.remove_lane(lane)
                 log.info("remote microphone: %s disconnected after %.0f s", self.device, time.monotonic() - started)
             self._out.put(None)
